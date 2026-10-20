@@ -59,3 +59,18 @@ subprojects {
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
+// Some plugin versions in pubspec.yaml (file_picker 8.x, ...) still compile
+// against android-34, while newer transitive AARs such as
+// flutter_plugin_android_lifecycle require compileSdk 36. Raise compileSdk for
+// every plugin subproject; the long-term fix is upgrading those plugins.
+// evaluationDependsOn(":app") above may already have evaluated a project, so
+// apply directly in that case instead of registering afterEvaluate.
+subprojects {
+    if (name != "app") {
+        val raiseCompileSdk: Project.() -> Unit = {
+            extensions.findByType<com.android.build.gradle.BaseExtension>()
+                ?.compileSdkVersion(36)
+        }
+        if (state.executed) raiseCompileSdk() else afterEvaluate { raiseCompileSdk() }
+    }
+}
