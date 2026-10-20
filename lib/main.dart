@@ -1,21 +1,31 @@
-import 'package:flutter/material.dart';
-import 'package:another_telephony/telephony.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter/services.dart';
-import 'database.dart' as database;
-import 'package:flutter_contacts/flutter_contacts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
-import 'package:file_picker/file_picker.dart';
-import 'package:excel/excel.dart' as excel;
 import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'core/sms/sms_message_info.dart';
+import 'core/utils/phone_normalizer.dart';
+import 'database.dart' as database;
+import 'features/groups/application/groups_providers.dart';
+import 'features/groups/data/excel_contacts_parser.dart';
+import 'features/groups/presentation/groups_page.dart';
+import 'shared/providers/app_providers.dart';
+import 'shared/widgets/message_composer.dart';
 import 'sms_send_coordinator.dart';
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -43,14 +53,14 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class HomePage extends StatefulWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends ConsumerState<HomePage> {
   List<Map<String, dynamic>> numbers = [];
   List<Map<String, dynamic>> allNumbers = [];
   List<Map<String, dynamic>> filteredNumbers = [];
@@ -65,32 +75,31 @@ class _HomePageState extends State<HomePage> {
   bool isSearching = false;
   bool isSending = false;
   bool stopSending = false;
-  int maxLength = 160;
-  bool isMessageTooLong = false;
 
   final ScrollController _scrollController = ScrollController();
 
   late final database.ApiService db;
 
   final TextEditingController numberController = TextEditingController();
-  final TextEditingController messageController = TextEditingController();
   final TextEditingController nameController =
       TextEditingController();
 
-  final Telephony telephony = Telephony.instance;
+  /// Shared with [GroupsPage] through [messageControllerProvider].
+  late final TextEditingController messageController;
+
   final SmsSendCoordinator _sendCoordinator = SmsSendCoordinator();
 
   @override
   void initState() {
     super.initState();
-    db = database.ApiService();
+    db = ref.read(apiServiceProvider);
+    messageController = ref.read(messageControllerProvider);
     requestPermission();
     loadCount();
     loadSentCount();
     loadContacts();
 
     _scrollController.addListener(_handleScrollReachedEnd);
-    messageController.addListener(_handleMessageChanged);
   }
 
   void _handleScrollReachedEnd() {
@@ -98,16 +107,6 @@ class _HomePageState extends State<HomePage> {
         _scrollController.position.maxScrollExtent - 300) {
       loadMore();
     }
-  }
-
-  void _handleMessageChanged() {
-    final text = messageController.text;
-
-    if (!mounted) return;
-
-    setState(() {
-      isMessageTooLong = text.length > maxLength;
-    });
   }
 
   Future<void> showLoadingDialog(String text) async {
@@ -550,8 +549,7 @@ class _HomePageState extends State<HomePage> {
   Future<bool> sendSingleSms({
     required String phone,
     required String message,
-    required bool isLongMessage,
-    required bool isSeventySevenLimit,
+    required bool multipart,
   }) async {
     final normalizedPhone = phone.trim();
     if (normalizedPhone.isEmpty) {
@@ -564,27 +562,13 @@ class _HomePageState extends State<HomePage> {
     }
 
     return _sendCoordinator.runPhoneSend(normalizedPhone, () async {
-      final completer = Completer<bool>();
+      final result = await ref.read(smsSenderProvider).send(
+            phone: normalizedPhone,
+            message: message,
+            multipart: multipart,
+          );
 
-      telephony.sendSms(
-        to: normalizedPhone,
-        message: message,
-        isMultipart: isLongMessage || isSeventySevenLimit,
-        statusListener: (SendStatus status) {
-          if (completer.isCompleted) return;
-
-          if (status == SendStatus.SENT || status == SendStatus.DELIVERED) {
-            completer.complete(true);
-          }
-        },
-      );
-
-      final success = await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => false,
-      );
-
-      if (!success) {
+      if (!result.success) {
         return false;
       }
 
@@ -605,13 +589,6 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> sendSMS([int delayMs = 0]) async {
     final message = messageController.text.trim();
-
-    if (isMessageTooLong) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сообщение слишком длинное')),
-      );
-      return;
-    }
 
     if (message.isEmpty || totalCount == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -659,12 +636,7 @@ class _HomePageState extends State<HomePage> {
       showStopButton: true,
       task: (update) async {
         final int total = sendList.length;
-
-        const int singleSmsLimit = 160;
-        const int seventySevenCharLimit = 70;
-
-        final bool isLongMessage = message.length > singleSmsLimit;
-        final bool isSeventySevenLimit = message.length > seventySevenCharLimit;
+        final bool multipart = SmsMessageInfo.analyze(message).isMultipart;
 
         int sent = 0;
 
@@ -685,8 +657,7 @@ class _HomePageState extends State<HomePage> {
             final success = await sendSingleSms(
               phone: phone,
               message: message,
-              isLongMessage: isLongMessage,
-              isSeventySevenLimit: isSeventySevenLimit,
+              multipart: multipart,
             );
 
             if (!success) {
@@ -778,6 +749,15 @@ class _HomePageState extends State<HomePage> {
       context,
       MaterialPageRoute(builder: (_) => const HistoryPage()),
     );
+  }
+
+  Future<void> openGroups() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GroupsPage()),
+    );
+    // A group send also marks numbers as sent on the backend.
+    await loadSentCount();
   }
 
   Widget buildCard({required Widget child}) {
@@ -886,34 +866,11 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 6),
 
               buildCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: messageController,
-                      maxLines: 3,
-                      decoration: InputDecoration(
-                        labelText: 'Текст сообщения',
-                        border: InputBorder.none,
-                        prefixIcon: const Icon(Icons.message),
-                        contentPadding: const EdgeInsets.all(12),
-                      ),
-                    ),
-
-                    Padding(
-                      padding: const EdgeInsets.only(right: 12, bottom: 6),
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: Text(
-                          "${messageController.text.length} / $maxLength",
-                          style: TextStyle(
-                            color: isMessageTooLong ? Colors.red : Colors.grey,
-                            fontWeight: isMessageTooLong ? FontWeight.bold : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                child: MessageComposer(
+                  controller: messageController,
+                  enabled: !isSending,
+                  minLines: 2,
+                  maxLines: 4,
                 ),
               ),
 
@@ -980,9 +937,29 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(width: 10),
 
                     SizedBox(
+                      width: 150,
+                      child: ElevatedButton(
+                        onPressed: openGroups,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.group_work),
+                            SizedBox(width: 8),
+                            Text('Группы'),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+
+                    SizedBox(
                       width: 180,
                       child: ElevatedButton(
-                        onPressed: numbers.isEmpty || isSending || isMessageTooLong
+                        onPressed: numbers.isEmpty || isSending
                           ? null
                           : () => openDelayDialog(),
                         child: const Row(
@@ -1147,11 +1124,8 @@ class _HomePageState extends State<HomePage> {
                                       final phone = item["phone_number"]!.toString();
                                       final message = messageController.text.trim();
 
-                                      const int singleSmsLimit = 160;
-                                      const int seventySevenCharLimit = 70;
-
-                                      final bool isLongMessage = message.length > singleSmsLimit;
-                                      final bool isSeventySevenLimit = message.length > seventySevenCharLimit;
+                                      final bool multipart =
+                                          SmsMessageInfo.analyze(message).isMultipart;
 
                                       if (message.isEmpty) {
                                         ScaffoldMessenger.of(localContext).showSnackBar(
@@ -1175,8 +1149,7 @@ class _HomePageState extends State<HomePage> {
                                       final success = await sendSingleSms(
                                         phone: phone,
                                         message: message,
-                                        isLongMessage: isLongMessage,
-                                        isSeventySevenLimit: isSeventySevenLimit,
+                                        multipart: multipart,
                                       );
 
                                       if (mounted && Navigator.canPop(context)) {
@@ -1241,11 +1214,10 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _debounce?.cancel();
     _scrollController.removeListener(_handleScrollReachedEnd);
-    messageController.removeListener(_handleMessageChanged);
     _scrollController.dispose();
     nameController.dispose();
     numberController.dispose();
-    messageController.dispose();
+    // messageController is owned by messageControllerProvider.
     super.dispose();
   }  
 }
@@ -1496,6 +1468,7 @@ class _AddContactPageState extends State<AddContactPage> {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
+      withData: true,
     );
 
     if (result == null) return;
@@ -1507,31 +1480,27 @@ class _AddContactPageState extends State<AddContactPage> {
     });
 
     final file = result.files.first;
+    final bytes = file.bytes ?? await File(file.path!).readAsBytes();
 
-    late List<int> bytes;
+    // Parsing + phone normalisation runs on a background isolate.
+    final parsed = await compute(ExcelContactsParser.parseBytes, bytes);
+    if (!mounted) return;
 
-    if (file.bytes != null) {
-      bytes = file.bytes!;
-    } else {
-      final path = file.path!;
-      bytes = await File(path).readAsBytes();
-    }
-
-    final excelFile = excel.Excel.decodeBytes(bytes);
-
-    if (excelFile.tables.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Excel файл пустой')));
+    if (parsed.recipients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            parsed.totalRows == 0
+                ? 'Excel файл пустой'
+                : 'В файле не найдено корректных номеров',
+          ),
+        ),
+      );
       setState(() => isImporting = false);
       return;
     }
 
-    var sheet = excelFile.tables[excelFile.tables.keys.first]!;
-
-    totalCountExcel = sheet.rows.length;
-
-    int available = maxContacts - totalCount;
+    final int available = maxContacts - totalCount;
 
     if (available <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1541,55 +1510,47 @@ class _AddContactPageState extends State<AddContactPage> {
       return;
     }
 
-    List<Map<String, String>> batch = [];
+    final toImport = parsed.recipients.take(available).toList();
+    totalCountExcel = toImport.length;
 
     const batchSize = 200;
 
-    int limit = sheet.rows.length > available ? available : sheet.rows.length;
+    for (int i = 0; i < toImport.length; i += batchSize) {
+      final chunk = toImport.sublist(
+        i,
+        math.min(i + batchSize, toImport.length),
+      );
 
-    for (int i = 0; i < limit; i++) {
-      final row = sheet.rows[i];
+      await db.insertContactsBatch([
+        for (final r in chunk) {'title': r.name, 'phone_number': r.phone},
+      ]);
 
-      if (row.length < 4) continue;
+      importedCount = i + chunk.length;
+      importProgress = importedCount / totalCountExcel;
 
-      String name = row[2]?.value.toString() ?? "";
-      String phone = row[3]?.value.toString() ?? "";
-
-      phone = phone.replaceAll(RegExp(r'[^0-9+]'), '');
-        
-      if (phone.startsWith('993')) {
-        phone = '+$phone';
-      } else if (!phone.startsWith('+993')) {
-        phone = '+993$phone';
-
-      }
-
-      batch.add({'title': name, 'phone_number': phone});
-
-      if (batch.length >= batchSize || i == sheet.rows.length - 1) {
-        await db.insertContactsBatch(batch);
-        batch.clear();
-
-        importedCount = i + 1;
-        importProgress = importedCount / totalCountExcel;
-
-        setState(() {});
-
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
+      if (!mounted) return;
+      setState(() {});
     }
 
     await loadCount();
     await loadNumbers();
 
+    if (!mounted) return;
     setState(() {
       isImporting = false;
       importProgress = 0;
     });
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text("Импортировано: $importedCount")));
+    final skipped = parsed.invalidCount + parsed.duplicateCount;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          skipped > 0
+              ? "Импортировано: $importedCount · пропущено: $skipped"
+              : "Импортировано: $importedCount",
+        ),
+      ),
+    );
   }
 
   Future<void> addNumber() async {
@@ -1598,8 +1559,9 @@ class _AddContactPageState extends State<AddContactPage> {
 
     if (isAdding) return;
 
-    number = number.replaceAll(RegExp(r'[^0-9+]'), '');
-    final isValid = RegExp(r'^\+993\d{8}$').hasMatch(number);
+    final normalized = PhoneNormalizer.normalize(number);
+    final isValid = normalized != null;
+    if (normalized != null) number = normalized;
 
     if (name.isEmpty) {
       name = "Без имени";
