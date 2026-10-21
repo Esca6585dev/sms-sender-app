@@ -45,9 +45,14 @@ class TelephonySmsSender implements SmsSender {
   TelephonySmsSender({
     Telephony? telephony,
     this.timeout = const Duration(seconds: 10),
-  }) : _telephony = telephony ?? Telephony.instance;
+    int Function()? subscriptionId,
+  })  : _telephony = telephony ?? Telephony.instance,
+        _subscriptionId = subscriptionId ?? (() => -1);
 
   final Telephony _telephony;
+
+  /// SIM to send from (`-1` = the system default SMS SIM).
+  final int Function() _subscriptionId;
 
   /// How long to wait for the SENT/DELIVERED callback before giving up.
   final Duration timeout;
@@ -65,6 +70,7 @@ class TelephonySmsSender implements SmsSender {
         to: phone,
         message: message,
         isMultipart: multipart,
+        subscriptionId: _subscriptionId(),
         statusListener: (SendStatus status) {
           if (completer.isCompleted) return;
           if (status == SendStatus.SENT || status == SendStatus.DELIVERED) {

@@ -88,13 +88,16 @@ class SmsGroup {
     required this.index,
     required this.startNumber,
     required List<SmsRecipient> recipients,
-  })  : recipients = List<SmsRecipient>.unmodifiable(recipients),
+    String? name,
+  })  : name = (name == null || name.trim().isEmpty) ? null : name.trim(),
+        recipients = List<SmsRecipient>.unmodifiable(recipients),
         counters = GroupCounters.of(recipients);
 
   factory SmsGroup.fromJson(Map<String, dynamic> json) => SmsGroup(
         id: json['id'] as String,
         index: json['index'] as int,
         startNumber: json['startNumber'] as int? ?? 1,
+        name: json['name'] as String?,
         recipients: ((json['recipients'] as List?) ?? const [])
             .map((e) => SmsRecipient.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -102,11 +105,14 @@ class SmsGroup {
 
   final String id;
 
-  /// 1-based ordinal: "Группа 1", "Группа 2"…
+  /// 1-based ordinal: group 1 is "A", 2 is "B", 27 is "AA"…
   final int index;
 
   /// 1-based position of the first recipient in the imported list.
   final int startNumber;
+
+  /// Custom name given by the operator; `null` = the default letter name.
+  final String? name;
 
   final List<SmsRecipient> recipients;
 
@@ -117,7 +123,23 @@ class SmsGroup {
 
   int get endNumber => startNumber + recipients.length - 1;
 
-  String get title => 'Группа $index';
+  /// Spreadsheet-style letter for [index]: A, B, …, Z, AA, AB…
+  String get letter => letterFor(index);
+
+  static String letterFor(int index) {
+    var n = index;
+    final chars = <String>[];
+    while (n > 0) {
+      final rem = (n - 1) % 26;
+      chars.insert(0, String.fromCharCode(65 + rem));
+      n = (n - 1) ~/ 26;
+    }
+    return chars.isEmpty ? '?' : chars.join();
+  }
+
+  String get defaultTitle => 'Группа $letter';
+
+  String get title => name ?? defaultTitle;
 
   String get rangeLabel => '№ $startNumber–$endNumber';
 
@@ -130,12 +152,24 @@ class SmsGroup {
     return GroupStatus.paused;
   }
 
-  SmsGroup copyWith({List<SmsRecipient>? recipients}) => SmsGroup(
+  SmsGroup copyWith({
+    List<SmsRecipient>? recipients,
+    String? name,
+    bool clearName = false,
+  }) =>
+      SmsGroup(
         id: id,
         index: index,
         startNumber: startNumber,
+        name: clearName ? null : (name ?? this.name),
         recipients: recipients ?? this.recipients,
       );
+
+  /// New display name; empty or null restores the default letter name.
+  SmsGroup rename(String? newName) =>
+      (newName == null || newName.trim().isEmpty)
+          ? copyWith(clearName: true)
+          : copyWith(name: newName);
 
   SmsGroup updateRecipient(
     int position,
@@ -154,6 +188,7 @@ class SmsGroup {
         'id': id,
         'index': index,
         'startNumber': startNumber,
+        if (name != null) 'name': name,
         'recipients': [for (final r in recipients) r.toJson()],
       };
 

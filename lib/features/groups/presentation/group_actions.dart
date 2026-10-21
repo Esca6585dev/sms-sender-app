@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
@@ -24,10 +25,14 @@ class GroupActions {
     final container = ProviderScope.containerOf(context, listen: false);
     final info = SmsMessageInfo.analyze(message);
     final remaining = group.counters.remaining;
+    final wasSending = container.read(groupsControllerProvider).isSending;
     final confirmed = await _confirm(
-      title: 'Отправить ${group.title}?',
-      message: 'Будет отправлено $remaining SMS${_partsSuffix(info)}.',
-      confirmLabel: 'Отправить',
+      title: wasSending
+          ? 'Добавить ${group.title} в очередь?'
+          : 'Отправить ${group.title}?',
+      message: 'Будет отправлено $remaining SMS${_partsSuffix(info)}.'
+          '${_costLine(remaining, info)}',
+      confirmLabel: wasSending ? 'В очередь' : 'Отправить',
     );
     if (!confirmed) return;
 
@@ -35,7 +40,11 @@ class GroupActions {
         .read(groupsControllerProvider.notifier)
         .sendGroup(group.id, message: message, delay: _delay());
     if (!started) {
-      _snack('Отправка уже выполняется');
+      _snack('${group.title} уже в очереди или отправляется');
+      return;
+    }
+    if (wasSending) {
+      _snack('${group.title} добавлена в очередь');
       return;
     }
 
@@ -56,11 +65,13 @@ class GroupActions {
     final container = ProviderScope.containerOf(context, listen: false);
     final state = ref.read(groupsControllerProvider);
     final info = SmsMessageInfo.analyze(message);
+    final wasSending = state.isSending;
     final confirmed = await _confirm(
-      title: 'Отправить все группы?',
+      title: wasSending ? 'Поставить все группы в очередь?' : 'Отправить все группы?',
       message: 'Групп: ${state.pendingGroupsCount}, '
-          'SMS: ${state.totals.remaining}${_partsSuffix(info)}.',
-      confirmLabel: 'Отправить все',
+          'SMS: ${state.totals.remaining}${_partsSuffix(info)}.'
+          '${_costLine(state.totals.remaining, info)}',
+      confirmLabel: wasSending ? 'В очередь' : 'Отправить все',
     );
     if (!confirmed) return;
 
@@ -68,7 +79,51 @@ class GroupActions {
         .read(groupsControllerProvider.notifier)
         .sendAllPending(message: message, delay: _delay());
     if (!started) {
-      _snack('Отправка уже выполняется');
+      _snack('Нечего отправлять');
+      return;
+    }
+    if (wasSending) {
+      _snack('Группы добавлены в очередь');
+      return;
+    }
+
+    await _saveHistory(container, message);
+    final totals = container.read(groupsControllerProvider).totals;
+    _snack('Готово: отправлено ${totals.sent} из ${totals.total}');
+  }
+
+  /// Sends the ticked groups (queued behind a running send).
+  Future<void> sendSelected() async {
+    final message = _message();
+    if (message == null) return;
+
+    final container = ProviderScope.containerOf(context, listen: false);
+    final state = ref.read(groupsControllerProvider);
+    final selected = state.selectedSendable;
+    if (selected.isEmpty) {
+      _snack('В выбранных группах нечего отправлять');
+      return;
+    }
+    final info = SmsMessageInfo.analyze(message);
+    final smsCount = selected.fold<int>(0, (n, g) => n + g.counters.remaining);
+    final wasSending = state.isSending;
+    final confirmed = await _confirm(
+      title: 'Отправить выбранные (${selected.length})?',
+      message: '${selected.map((g) => g.title).join(', ')}.\n'
+          'SMS: $smsCount${_partsSuffix(info)}.${_costLine(smsCount, info)}',
+      confirmLabel: wasSending ? 'В очередь' : 'Отправить',
+    );
+    if (!confirmed) return;
+
+    final started = await container
+        .read(groupsControllerProvider.notifier)
+        .sendSelected(message: message, delay: _delay());
+    if (!started) {
+      _snack('Группы уже в очереди');
+      return;
+    }
+    if (wasSending) {
+      _snack('Группы добавлены в очередь');
       return;
     }
 
@@ -78,6 +133,49 @@ class GroupActions {
   }
 
   void stop() => ref.read(groupsControllerProvider.notifier).stop();
+
+  void dequeue(SmsGroup group) {
+    ref.read(groupsControllerProvider.notifier).dequeue(group.id);
+    _snack('${group.title} убрана из очереди');
+  }
+
+  /// Dialog with the group name; empty restores "Группа A".
+  Future<void> rename(SmsGroup group) async {
+    final controller = TextEditingController(text: group.name ?? '');
+    final result = await showDialog<_RenameResult>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Название · ${group.defaultTitle}'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(hintText: group.defaultTitle),
+          onSubmitted: (_) =>
+              Navigator.pop(ctx, _RenameResult(controller.text)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, const _RenameResult(null)),
+            child: const Text('По умолчанию'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, _RenameResult(controller.text)),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || !context.mounted) return;
+    await ref
+        .read(groupsControllerProvider.notifier)
+        .renameGroup(group.id, result.name);
+  }
 
   Future<void> resetGroup(SmsGroup group) async {
     final confirmed = await _confirm(
@@ -143,6 +241,20 @@ class GroupActions {
   static String _partsSuffix(SmsMessageInfo info) =>
       info.isMultipart ? ' (каждое из ${info.parts} частей)' : '';
 
+  /// `\nСтоимость ≈ 1,00 TMT · баланс 12,30 TMT` (+ a warning when short).
+  String _costLine(int smsCount, SmsMessageInfo info) {
+    final balance = ref.read(balanceProvider);
+    final parts = info.parts == 0 ? 1 : info.parts;
+    final cost = balance.cost(smsCount, parts);
+    final buffer = StringBuffer('\nСтоимость ≈ ${formatManat(cost)}');
+    final known = balance.balance;
+    if (known != null) {
+      buffer.write(' · баланс ${formatManat(known)}');
+      if (known < cost) buffer.write('\nБаланса может не хватить!');
+    }
+    return buffer.toString();
+  }
+
   Future<void> _saveHistory(ProviderContainer container, String message) async {
     try {
       await container.read(apiServiceProvider).insertMessage(message);
@@ -185,4 +297,10 @@ class GroupActions {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
+}
+
+class _RenameResult {
+  const _RenameResult(this.name);
+
+  final String? name;
 }

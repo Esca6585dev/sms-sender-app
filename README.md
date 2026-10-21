@@ -12,7 +12,16 @@ history live on the backend; group sending runs on the device through
   Группа 2: 101–200, …), with invalid and duplicate numbers reported.
 - Per-group send / continue / reset, global "send all" and "stop", live
   counters (sent / remaining / failed) and progress bars.
-- Groups survive app restarts (stored in `SharedPreferences`).
+- Groups survive app restarts (stored in `SharedPreferences`); groups are named
+  A, B, C… and can be renamed; several groups can be selected and queued.
+- Four switchable design styles (Soft Glass, Bold Brand, Clean Mono, Dark Neon),
+  each with light and dark variants, chosen in the drawer.
+- Local send history (when, which numbers, result) and statistics.
+- SMS cost (1 part = 0.01 TMT by default) and balance read from the operator's
+  SMS reply; SIM choice on dual-SIM phones; a foreground service keeps a long
+  send alive in the background (notification with "Stop").
+- Devices screen for several phones on one backend; the backend endpoints it
+  expects are described in `docs/DEVICES_API.md`.
 
 ## Structure
 

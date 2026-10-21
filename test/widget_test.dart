@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sms_sender_app/core/device/device_bridge.dart';
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
@@ -18,6 +20,8 @@ Widget buildApp(InMemoryGroupsRepository repository) => ProviderScope(
         excelParserProvider.overrideWithValue(FakeExcelParser().call),
         sentNumbersSyncProvider.overrideWithValue(null),
         campaignRepositoryProvider.overrideWithValue(InMemoryCampaignRepository()),
+        deviceBridgeProvider.overrideWithValue(NoopDeviceBridge()),
+        incomingSmsProvider.overrideWithValue(FakeIncomingSms()),
       ],
       child: const MaterialApp(home: GroupsPage()),
     );
@@ -42,10 +46,10 @@ void main() {
     expect(find.text('Групп: 2'), findsOneWidget);
     expect(find.text('Номеров: 150'), findsOneWidget);
     expect(find.text('Отправить все (2)'), findsOneWidget);
-    expect(find.text('Группа 1'), findsOneWidget);
-    expect(find.text('Группа 2'), findsOneWidget);
-    expect(find.text('№ 1–100 · 100 номеров'), findsOneWidget);
-    expect(find.text('№ 101–150 · 50 номеров'), findsOneWidget);
+    expect(find.text('Группа A'), findsOneWidget);
+    expect(find.text('Группа B'), findsOneWidget);
+    expect(find.text('№ 1–100 · 100 номеров · ≈ 1,00 TMT'), findsOneWidget);
+    expect(find.text('№ 101–150 · 50 номеров · ≈ 0,50 TMT'), findsOneWidget);
     expect(find.text('Ожидает'), findsNWidgets(2));
     expect(find.text('0 / 160 · SMS: 0 · GSM-7'), findsOneWidget);
   });

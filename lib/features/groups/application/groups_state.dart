@@ -43,9 +43,17 @@ class GroupsState {
     this.stopRequested = false,
     this.errorMessage,
     this.lastImport,
+    this.queue = const [],
+    this.selectedIds = const {},
   });
 
   final List<SmsGroup> groups;
+
+  /// Groups waiting to be sent after [activeGroupId], in order.
+  final List<String> queue;
+
+  /// Groups ticked by the operator for "send selected".
+  final Set<String> selectedIds;
 
   /// `true` until the persisted groups have been restored.
   final bool isLoading;
@@ -85,6 +93,24 @@ class GroupsState {
   SmsGroup? get activeGroup =>
       activeGroupId == null ? null : groupById(activeGroupId!);
 
+  bool isQueued(String id) => queue.contains(id);
+
+  /// 1-based place in the queue, `null` when not queued.
+  int? queuePosition(String id) {
+    final i = queue.indexOf(id);
+    return i < 0 ? null : i + 1;
+  }
+
+  bool isSelected(String id) => selectedIds.contains(id);
+
+  bool get hasSelection => selectedIds.isNotEmpty;
+
+  /// Selected groups that still have numbers to send.
+  List<SmsGroup> get selectedSendable => [
+        for (final g in groups)
+          if (selectedIds.contains(g.id) && g.counters.remaining > 0) g,
+      ];
+
   SmsGroup? groupById(String id) {
     for (final g in groups) {
       if (g.id == id) return g;
@@ -100,6 +126,8 @@ class GroupsState {
     bool? stopRequested,
     Object? errorMessage = _unset,
     Object? lastImport = _unset,
+    List<String>? queue,
+    Set<String>? selectedIds,
   }) {
     return GroupsState(
       groups: groups ?? this.groups,
@@ -115,6 +143,8 @@ class GroupsState {
       lastImport: identical(lastImport, _unset)
           ? this.lastImport
           : lastImport as ImportSummary?,
+      queue: queue ?? this.queue,
+      selectedIds: selectedIds ?? this.selectedIds,
     );
   }
 }

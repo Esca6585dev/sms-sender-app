@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sms_sender_app/app/app_bottom_bar.dart';
 import 'package:sms_sender_app/app/app_drawer.dart';
 import 'package:sms_sender_app/features/groups/presentation/groups_page.dart';
 import 'package:sms_sender_app/features/history/presentation/history_page.dart';
@@ -67,18 +68,10 @@ class AppShell extends ConsumerWidget {
           StatsPage(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab.index,
-        onDestinationSelected: (index) =>
-            ref.read(appTabProvider.notifier).select(AppTab.values[index]),
-        destinations: [
-          for (final t in AppTab.values)
-            NavigationDestination(
-              icon: Icon(t.icon),
-              selectedIcon: Icon(t.selectedIcon),
-              label: t.label,
-            ),
-        ],
+      bottomNavigationBar: AppBottomBar(
+        current: tab,
+        onSelected: (selected) =>
+            ref.read(appTabProvider.notifier).select(selected),
       ),
     );
   }

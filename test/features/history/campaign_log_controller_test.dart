@@ -78,7 +78,7 @@ void main() {
       expect(log.campaigns.length, 1);
       final summary = log.campaigns.first;
       expect(summary.source, CampaignSource.group);
-      expect(summary.sourceLabel, contains('Группа 1'));
+      expect(summary.sourceLabel, contains('Группа A'));
       expect(summary.total, 30);
       expect(summary.sent, 29);
       expect(summary.failed, 1);

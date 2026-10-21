@@ -52,7 +52,7 @@ void main() {
       expect(summary.imported, 250);
       expect(summary.groupsCreated, 3);
       expect(groups.map((g) => g.index), [1, 2, 3]);
-      expect(groups.map((g) => g.title), ['Группа 1', 'Группа 2', 'Группа 3']);
+      expect(groups.map((g) => g.title), ['Группа A', 'Группа B', 'Группа C']);
       expect(groups.map((g) => g.total), [100, 100, 50]);
       expect(groups.map((g) => g.startNumber), [1, 101, 201]);
       expect(groups.map((g) => g.endNumber), [100, 200, 250]);

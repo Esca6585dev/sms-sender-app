@@ -3,8 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart';
 import 'package:sms_sender_app/app/theme.dart';
-import 'package:sms_sender_app/app/theme_mode_controller.dart';
+import 'package:sms_sender_app/app/theme_settings_controller.dart';
 import 'package:sms_sender_app/features/contacts/add_contact_page.dart';
+import 'package:sms_sender_app/features/devices/devices_page.dart';
 import 'package:sms_sender_app/features/history/presentation/server_messages_page.dart';
 
 /// Burger menu: sections, secondary screens and the theme switch.
@@ -14,8 +15,9 @@ class AppDrawer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tab = ref.watch(appTabProvider);
-    final mode = ref.watch(themeModeProvider);
+    final settings = ref.watch(themeSettingsProvider);
     final scheme = Theme.of(context).colorScheme;
+    final brightness = Theme.of(context).brightness;
 
     void go(AppTab target) {
       ref.read(appTabProvider.notifier).select(target);
@@ -53,11 +55,51 @@ class AppDrawer extends ConsumerWidget {
                     onTap: () => push(const AddContactPage()),
                   ),
                   ListTile(
+                    leading: const Icon(Icons.devices_outlined),
+                    title: const Text('Устройства и баланс'),
+                    subtitle: const Text('SIM, баланс, цена SMS, другие телефоны'),
+                    onTap: () => push(const DevicesPage()),
+                  ),
+                  ListTile(
                     leading: const Icon(Icons.cloud_outlined),
                     title: const Text('Тексты на сервере'),
                     subtitle: const Text('Сохранённые тексты сообщений'),
                     onTap: () => push(const ServerMessagesPage()),
                   ),
+                  const Divider(height: 20),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                    child: Text(
+                      'Дизайн',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  for (final style in AppStyle.values)
+                    ListTile(
+                      dense: true,
+                      leading: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: AppTheme.tokens(style, brightness).accent,
+                          borderRadius: BorderRadius.circular(9),
+                          border: Border.all(color: scheme.outlineVariant),
+                        ),
+                      ),
+                      title: Text(style.label),
+                      subtitle: Text(style.description),
+                      trailing: settings.style == style
+                          ? Icon(Icons.check_circle, color: scheme.primary)
+                          : null,
+                      selected: settings.style == style,
+                      onTap: () => ref
+                          .read(themeSettingsProvider.notifier)
+                          .selectStyle(style),
+                    ),
                   const Divider(height: 20),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -91,10 +133,10 @@ class AppDrawer extends ConsumerWidget {
                           label: Text('Тёмная', maxLines: 1),
                         ),
                       ],
-                      selected: {mode},
+                      selected: {settings.mode},
                       onSelectionChanged: (selection) => ref
-                          .read(themeModeProvider.notifier)
-                          .select(selection.first),
+                          .read(themeSettingsProvider.notifier)
+                          .selectMode(selection.first),
                     ),
                   ),
                 ],

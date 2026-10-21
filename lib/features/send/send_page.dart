@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
+import 'package:sms_sender_app/core/device/device_bridge.dart';
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
 import 'package:sms_sender_app/database.dart' as database;
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/contacts/add_contact_page.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
@@ -603,13 +605,18 @@ class _SendPageState extends ConsumerState<SendPage> {
       showStopButton: true,
       task: (update) async {
         final int total = sendList.length;
-        final bool multipart = SmsMessageInfo.analyze(message).isMultipart;
+        final info = SmsMessageInfo.analyze(message);
+        final bool multipart = info.isMultipart;
+        final bridge = ref.read(deviceBridgeProvider);
+        final balance = ref.read(balanceProvider.notifier);
 
         int sent = 0;
         final startedAt = DateTime.now();
         final processed = <CampaignRecipient>[];
 
         stopSending = false;
+        unawaited(bridge.startSending('Рассылка SMS', 'Все номера: 0 / $total'));
+        unawaited(bridge.keepScreenOn(true));
 
         for (int i = 0; i < sendList.length; i++) {
           if (stopSending || !mounted) {
@@ -637,6 +644,9 @@ class _SendPageState extends ConsumerState<SendPage> {
                 sentAt: success ? DateTime.now() : null,
               ),
             );
+            if (success) {
+              unawaited(balance.deduct(smsCount: 1, parts: info.parts));
+            }
 
             if (!success) {
               if (delayMs > 0 && mounted) {
@@ -656,6 +666,8 @@ class _SendPageState extends ConsumerState<SendPage> {
                 error: e.toString(),
               ),
             );
+            unawaited(bridge.stopSending());
+            unawaited(bridge.keepScreenOn(false));
             await _recordCampaign(
               message: message,
               startedAt: startedAt,
@@ -700,12 +712,17 @@ class _SendPageState extends ConsumerState<SendPage> {
           sent++;
           final percent = ((sent / total) * 100).toInt();
           update(percent, 'Отправлено $sent из $total');
+          unawaited(
+            bridge.updateSending('Рассылка SMS', 'Все номера: $sent / $total'),
+          );
 
           if (delayMs > 0 && mounted) {
             await Future.delayed(Duration(milliseconds: delayMs));
           }
         }
 
+        unawaited(bridge.stopSending());
+        unawaited(bridge.keepScreenOn(false));
         await _recordCampaign(
           message: message,
           startedAt: startedAt,
@@ -822,6 +839,14 @@ class _SendPageState extends ConsumerState<SendPage> {
         message: message,
         multipart: multipart,
       );
+      if (success) {
+        unawaited(
+          ref.read(balanceProvider.notifier).deduct(
+                smsCount: 1,
+                parts: SmsMessageInfo.analyze(message).parts,
+              ),
+        );
+      }
     } catch (e) {
       error = e.toString();
     }

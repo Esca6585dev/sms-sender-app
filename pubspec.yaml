@@ -67,6 +67,25 @@ flutter:
   assets:
     - assets/elite_logo.jpg
 
+  # Bundled Google Fonts (variable files, all with Cyrillic glyphs), one per
+  # design style, see lib/app/theme.dart.
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope-500.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-400.ttf
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/Montserrat-500.ttf
+    - family: Onest
+      fonts:
+        - asset: assets/fonts/Onest-400.ttf
+    - family: Exo2
+      fonts:
+        - asset: assets/fonts/Exo2-400.ttf
+
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.

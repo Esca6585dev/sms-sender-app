@@ -93,6 +93,31 @@ Ugradylan belgi backend-e hem `markNumberAsSent` bilen bellenýär (best-effort)
   ýalňyş / kampaniýa sany / toparlardaky belgiler, 7 günlük diagramma, çeşmeler
   boýunça bölünişik, soňky ugratmalar. Hasaplama `CampaignStats.from()` (arassa Dart).
 
+## 4b. Dizaýn saýlawy, nobat, balans, arka plan (2026-10-21, 2-nji tapgyr)
+
+- **4 dizaýn stili** (`lib/app/theme.dart`, `theme_palettes.dart`): Soft Glass,
+  Bold Brand, Clean Mono, Dark Neon — her biri light/dark. Menýuda "Дизайн" we
+  "Тема оформления" saýlawy, `ThemeSettingsController` ýatda saklaýar. Şriftler
+  `assets/fonts` (Manrope, Montserrat, Inter, Onest, Exo 2 — kirillisa bar).
+  Aşaky nawigasiýa stile görä çekilýär (`app_bottom_bar.dart`).
+- **Toparlar:** adlar harp bilen (Группа A, B … Z, AA), ⋮ → "Переименовать".
+  Kartoçkada "Показать номера (100)" — belgiler göni açylýar. Uzyn basmak →
+  saýlama režimi, ýokarda "Отправить выбранные". **Nobat:** ugratma gidip
+  durka goşulan toparlar nobata düşýär (`GroupsState.queue`), panelde çipler,
+  "Убрать из очереди", "Стоп" nobaty hem arassalaýar. "Повторить (N)" diňe
+  ugradylmadyklara gidýär.
+- **Baha we balans** (`lib/features/balance/balance_controller.dart`): 1 SMS
+  bölegi = 0,01 TMT (sazlanýar); her toparda "≈ 1,00 TMT", tassyklamada jemi
+  çykdajy we balans; balans 0800-e SMS iberip gelýän jogapdan okalýar
+  (`parseBalance`), elde girizip hem bolýar; her ugradylan SMS-den soň azalýar.
+  Köp SIM: "Устройства" ekranynda saýlanýar (`subscriptionId`).
+- **Arka plan:** `SendingService.kt` foreground service + bildiriş ("Стоп"
+  düwmesi bilen), ekran öçmeýär; `MainActivity.kt` MethodChannel
+  (`elite_sms/device`): SIM sanawy, serwis, keep-screen-on.
+- **Устройства** (`lib/features/devices/`): şu telefon, SIM, balans, baha;
+  beýleki telefonlar backend `GET /devices/` + `POST /devices/heartbeat/`
+  arkaly — şertnama `docs/DEVICES_API.md`-de (backend tarapynda ýazylmaly).
+
 ## 5. Testler
 
 ```

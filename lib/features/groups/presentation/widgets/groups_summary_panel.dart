@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
 
-/// Totals over all groups, delay selector and the global send/stop buttons.
+/// Totals over all groups, balance line, send queue, delay selector and the
+/// global send/stop buttons.
 class GroupsSummaryPanel extends StatelessWidget {
   const GroupsSummaryPanel({
     super.key,
@@ -12,6 +15,9 @@ class GroupsSummaryPanel extends StatelessWidget {
     required this.onDelayChanged,
     required this.onSendAll,
     required this.onStop,
+    this.balance,
+    this.onCheckBalance,
+    this.onDequeue,
   });
 
   final GroupsState state;
@@ -19,6 +25,9 @@ class GroupsSummaryPanel extends StatelessWidget {
   final ValueChanged<int> onDelayChanged;
   final VoidCallback onSendAll;
   final VoidCallback onStop;
+  final BalanceState? balance;
+  final VoidCallback? onCheckBalance;
+  final ValueChanged<String>? onDequeue;
 
   static String delayLabel(int ms) => switch (ms) {
         0 => 'Без задержки',
@@ -82,11 +91,62 @@ class GroupsSummaryPanel extends StatelessWidget {
                 child: Text(
                   'Отправка: ${active.title} · '
                   '${active.counters.sent} / ${active.counters.total}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: Colors.indigo,
+                    color: AppStyleTokens.of(context).accent,
                   ),
+                ),
+              ),
+            if (state.queue.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Text('Очередь:', style: TextStyle(fontSize: 12)),
+                    for (var i = 0; i < state.queue.length; i++)
+                      InputChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '${i + 1}. ${state.groupById(state.queue[i])?.title ?? '?'}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        onDeleted: onDequeue == null
+                            ? null
+                            : () => onDequeue!(state.queue[i]),
+                      ),
+                  ],
+                ),
+              ),
+            if (balance != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.account_balance_wallet_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        balance!.balance == null
+                            ? 'Баланс неизвестен'
+                            : 'Баланс ${formatManat(balance!.balance!)}'
+                                '${balance!.affordableSms != null ? ' · ≈ ${balance!.affordableSms} SMS' : ''}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    if (onCheckBalance != null)
+                      TextButton(
+                        onPressed: balance!.isChecking ? null : onCheckBalance,
+                        child: Text(balance!.isChecking ? 'Ждём…' : 'Проверить'),
+                      ),
+                  ],
                 ),
               ),
             const SizedBox(height: 8),
@@ -121,10 +181,15 @@ class GroupsSummaryPanel extends StatelessWidget {
               children: [
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed:
-                        state.isBusy || pendingGroups == 0 ? null : onSendAll,
-                    icon: const Icon(Icons.send),
-                    label: Text('Отправить все ($pendingGroups)'),
+                    onPressed: state.isImporting || pendingGroups == 0
+                        ? null
+                        : onSendAll,
+                    icon: Icon(state.isSending ? Icons.playlist_add : Icons.send),
+                    label: Text(
+                      state.isSending
+                          ? 'Все в очередь ($pendingGroups)'
+                          : 'Отправить все ($pendingGroups)',
+                    ),
                   ),
                 ),
                 if (state.isSending) ...[

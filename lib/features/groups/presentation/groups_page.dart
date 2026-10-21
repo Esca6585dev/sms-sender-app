@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
+import 'package:sms_sender_app/core/sms/sms_message_info.dart';
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
@@ -43,10 +45,35 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
     final state = ref.watch(groupsControllerProvider);
     final messageController = ref.watch(messageControllerProvider);
     final delayMs = ref.watch(sendDelayProvider);
+    final balance = ref.watch(balanceProvider);
+    final parts = SmsMessageInfo.analyze(messageController.text).parts;
+    final partsForCost = parts == 0 ? 1 : parts;
     final actions = GroupActions(context, ref);
+    final notifier = ref.read(groupsControllerProvider.notifier);
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: state.hasSelection
+          ? AppBar(
+              leading: IconButton(
+                tooltip: 'Снять выделение',
+                icon: const Icon(Icons.close),
+                onPressed: notifier.clearSelection,
+              ),
+              title: Text('Выбрано: ${state.selectedIds.length}'),
+              actions: [
+                IconButton(
+                  tooltip: 'Выбрать все',
+                  icon: const Icon(Icons.select_all),
+                  onPressed: notifier.selectAllPending,
+                ),
+                IconButton(
+                  tooltip: 'Отправить выбранные',
+                  icon: const Icon(Icons.send),
+                  onPressed: state.isImporting ? null : actions.sendSelected,
+                ),
+              ],
+            )
+          : AppBar(
         leading: const ShellMenuButton(),
         title: const Text('Группы рассылки'),
         actions: [
@@ -120,16 +147,30 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
                       ref.read(sendDelayProvider.notifier).select(ms),
                   onSendAll: actions.sendAll,
                   onStop: actions.stop,
+                  balance: balance,
+                  onCheckBalance: () =>
+                      ref.read(balanceProvider.notifier).checkViaSms(),
+                  onDequeue: (id) {
+                    final group = state.groupById(id);
+                    if (group != null) actions.dequeue(group);
+                  },
                 ),
               ),
-            Expanded(child: _buildBody(state, actions)),
+            Expanded(
+              child: _buildBody(state, actions, balance, partsForCost),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBody(GroupsState state, GroupActions actions) {
+  Widget _buildBody(
+    GroupsState state,
+    GroupActions actions,
+    BalanceState balance,
+    int partsForCost,
+  ) {
     if (state.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -141,11 +182,23 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
       itemCount: state.groups.length,
       itemBuilder: (context, index) {
         final group = state.groups[index];
+        final c = group.counters;
         return GroupCard(
           key: ValueKey(group.id),
           group: group,
           isActive: state.activeGroupId == group.id,
-          actionsEnabled: !state.isBusy,
+          actionsEnabled: !state.isImporting,
+          queuePosition: state.queuePosition(group.id),
+          selectionMode: state.hasSelection,
+          selected: state.isSelected(group.id),
+          onToggleSelected: () => ref
+              .read(groupsControllerProvider.notifier)
+              .toggleSelected(group.id),
+          onDequeue: () => actions.dequeue(group),
+          onRename: () => actions.rename(group),
+          costLabel: c.remaining > 0
+              ? '≈ ${formatManat(balance.cost(c.remaining, partsForCost))}'
+              : null,
           onSend: () => actions.sendGroup(group),
           onReset: () => actions.resetGroup(group),
           onRemove: () => actions.removeGroup(group),

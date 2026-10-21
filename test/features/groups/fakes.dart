@@ -3,10 +3,13 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sms_sender_app/core/device/device_bridge.dart';
 import 'package:sms_sender_app/core/sms/sms_sender.dart';
+import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/data/excel_contacts_parser.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
+import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/data/campaign_repository.dart';
@@ -60,15 +63,21 @@ ProviderContainer makeContainer({
   required FakeSmsSender sender,
   required FakeExcelParser parser,
   InMemoryCampaignRepository? campaigns,
+  NoopDeviceBridge? bridge,
+  FakeIncomingSms? incomingSms,
+  int batchSize = GroupBatcher.defaultBatchSize,
 }) {
   final container = ProviderContainer(
     overrides: [
+      groupBatcherProvider.overrideWithValue(GroupBatcher(batchSize: batchSize)),
       groupsRepositoryProvider.overrideWithValue(repository),
       smsSenderProvider.overrideWithValue(sender),
       excelParserProvider.overrideWithValue(parser.call),
       sentNumbersSyncProvider.overrideWithValue(null),
       campaignRepositoryProvider
           .overrideWithValue(campaigns ?? InMemoryCampaignRepository()),
+      deviceBridgeProvider.overrideWithValue(bridge ?? NoopDeviceBridge()),
+      incomingSmsProvider.overrideWithValue(incomingSms ?? FakeIncomingSms()),
     ],
   );
   addTearDown(container.dispose);

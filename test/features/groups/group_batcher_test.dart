@@ -11,7 +11,8 @@ void main() {
 
       expect(groups.length, 10);
       expect(groups.every((g) => g.total == 100), isTrue);
-      expect(groups.first.title, 'Группа 1');
+      expect(groups.first.title, 'Группа A');
+      expect(groups.last.title, 'Группа J');
       expect(groups.first.rangeLabel, '№ 1–100');
       expect(groups[1].rangeLabel, '№ 101–200');
       expect(groups.last.rangeLabel, '№ 901–1000');

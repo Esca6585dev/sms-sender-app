@@ -1,12 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:sms_sender_app/core/sms/sms_sender.dart';
 import 'package:sms_sender_app/features/groups/data/excel_contacts_parser.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/data/sent_numbers_sync.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
 import 'package:sms_sender_app/shared/providers/app_providers.dart';
+
+// The device sender lives next to the SIM choice / balance it depends on.
+export 'package:sms_sender_app/features/balance/balance_controller.dart'
+    show smsSenderProvider;
 
 /// Parses an `.xlsx` file. Injected so tests can skip the real parser.
 typedef ExcelParser = Future<ExcelParseResult> Function(Uint8List bytes);
@@ -15,10 +18,6 @@ typedef ExcelParser = Future<ExcelParseResult> Function(Uint8List bytes);
 /// in a `ProviderScope` / `ProviderContainer` for tests.
 final groupsRepositoryProvider = Provider<GroupsRepository>(
   (ref) => SharedPrefsGroupsRepository(),
-);
-
-final smsSenderProvider = Provider<SmsSender>(
-  (ref) => TelephonySmsSender(),
 );
 
 /// Runs the Excel parser on a background isolate so a 5 000-row file does

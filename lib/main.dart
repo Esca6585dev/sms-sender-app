@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app_shell.dart';
 import 'app/theme.dart';
-import 'app/theme_mode_controller.dart';
+import 'app/theme_settings_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,14 +16,14 @@ class MyApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final themeMode = ref.watch(themeModeProvider);
+    final settings = ref.watch(themeSettingsProvider);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'elite SMS',
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: themeMode,
+      theme: AppTheme.build(settings.style, Brightness.light),
+      darkTheme: AppTheme.build(settings.style, Brightness.dark),
+      themeMode: settings.mode,
       home: const AppShell(),
     );
   }
