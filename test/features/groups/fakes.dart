@@ -8,6 +8,8 @@ import 'package:sms_sender_app/features/groups/application/groups_providers.dart
 import 'package:sms_sender_app/features/groups/data/excel_contacts_parser.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
+import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
+import 'package:sms_sender_app/features/history/data/campaign_repository.dart';
 
 /// Records every send; can fail or throw for chosen numbers.
 class FakeSmsSender implements SmsSender {
@@ -57,6 +59,7 @@ ProviderContainer makeContainer({
   required InMemoryGroupsRepository repository,
   required FakeSmsSender sender,
   required FakeExcelParser parser,
+  InMemoryCampaignRepository? campaigns,
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -64,6 +67,8 @@ ProviderContainer makeContainer({
       smsSenderProvider.overrideWithValue(sender),
       excelParserProvider.overrideWithValue(parser.call),
       sentNumbersSyncProvider.overrideWithValue(null),
+      campaignRepositoryProvider
+          .overrideWithValue(campaigns ?? InMemoryCampaignRepository()),
     ],
   );
   addTearDown(container.dispose);

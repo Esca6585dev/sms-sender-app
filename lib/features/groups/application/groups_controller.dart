@@ -12,6 +12,8 @@ import 'package:sms_sender_app/features/groups/data/sent_numbers_sync.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
+import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
+import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
 
 /// Business logic of the groups feature: import, batching, sequential
 /// sending with live counters, stop, reset and persistence.
@@ -172,12 +174,21 @@ class GroupsController extends Notifier<GroupsState> {
         if (group == null) continue;
 
         _emit(state.copyWith(activeGroupId: id));
+        final startedAt = DateTime.now();
+        final processed = <CampaignRecipient>[];
         await _sendRecipients(
           groupId: id,
           count: group.total,
           message: text,
           multipart: multipart,
           delay: delay,
+          processed: processed,
+        );
+        _recordCampaign(
+          message: text,
+          group: group,
+          startedAt: startedAt,
+          processed: processed,
         );
       }
     } finally {
@@ -193,6 +204,7 @@ class GroupsController extends Notifier<GroupsState> {
     required String message,
     required bool multipart,
     required Duration delay,
+    required List<CampaignRecipient> processed,
   }) async {
     for (var i = 0; i < count; i++) {
       if (_stopRequested || _disposed) return;
@@ -216,34 +228,37 @@ class GroupsController extends Notifier<GroupsState> {
           multipart: multipart,
         );
       } on SmsSendException catch (error) {
+        processed.add(_logEntry(recipient, sent: false, error: error.message));
         _abort(groupId, i, error.message);
         return;
       } catch (error) {
+        processed.add(_logEntry(recipient, sent: false, error: '$error'));
         _abort(groupId, i, error.toString());
         return;
       }
 
       if (result.success) {
+        final sentAt = DateTime.now();
         _patch(
           groupId,
           i,
           (r) => r.copyWith(
             status: RecipientStatus.sent,
             error: null,
-            sentAt: DateTime.now(),
+            sentAt: sentAt,
           ),
         );
+        processed.add(_logEntry(recipient, sent: true, sentAt: sentAt));
         final sync = _sync;
         if (sync != null) unawaited(sync.markSent(recipient.phone));
       } else {
+        final error = result.error ?? 'Не отправлено';
         _patch(
           groupId,
           i,
-          (r) => r.copyWith(
-            status: RecipientStatus.failed,
-            error: result.error ?? 'Не отправлено',
-          ),
+          (r) => r.copyWith(status: RecipientStatus.failed, error: error),
         );
+        processed.add(_logEntry(recipient, sent: false, error: error));
       }
       _schedulePersist();
 
@@ -251,6 +266,41 @@ class GroupsController extends Notifier<GroupsState> {
         await Future<void>.delayed(delay);
       }
     }
+  }
+
+  static CampaignRecipient _logEntry(
+    SmsRecipient recipient, {
+    required bool sent,
+    String? error,
+    DateTime? sentAt,
+  }) =>
+      CampaignRecipient(
+        phone: recipient.phone,
+        name: recipient.name,
+        sent: sent,
+        error: error,
+        sentAt: sentAt,
+      );
+
+  /// Stores the finished run in the history (best effort, never blocks).
+  void _recordCampaign({
+    required String message,
+    required SmsGroup group,
+    required DateTime startedAt,
+    required List<CampaignRecipient> processed,
+  }) {
+    if (processed.isEmpty || _disposed) return;
+    unawaited(
+      ref.read(campaignLogProvider.notifier).record(
+            SmsCampaign.fromRun(
+              message: message,
+              source: CampaignSource.group,
+              sourceLabel: '${group.title} (${group.rangeLabel})',
+              startedAt: startedAt,
+              recipients: processed,
+            ),
+          ),
+    );
   }
 
   void _abort(String groupId, int index, String details) {

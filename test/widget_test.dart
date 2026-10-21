@@ -6,6 +6,8 @@ import 'package:sms_sender_app/features/groups/application/groups_providers.dart
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
 import 'package:sms_sender_app/features/groups/presentation/groups_page.dart';
+import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
+import 'package:sms_sender_app/features/history/data/campaign_repository.dart';
 
 import 'features/groups/fakes.dart';
 
@@ -15,6 +17,7 @@ Widget buildApp(InMemoryGroupsRepository repository) => ProviderScope(
         smsSenderProvider.overrideWithValue(FakeSmsSender()),
         excelParserProvider.overrideWithValue(FakeExcelParser().call),
         sentNumbersSyncProvider.overrideWithValue(null),
+        campaignRepositoryProvider.overrideWithValue(InMemoryCampaignRepository()),
       ],
       child: const MaterialApp(home: GroupsPage()),
     );

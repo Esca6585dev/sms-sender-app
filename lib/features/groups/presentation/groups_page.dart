@@ -1,10 +1,10 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
@@ -47,6 +47,7 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: const ShellMenuButton(),
         title: const Text('Группы рассылки'),
         actions: [
           IconButton(
@@ -201,23 +202,22 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
       replace = choice == _ImportMode.replace;
     }
 
-    final picked = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['xlsx'],
-      withData: true,
     );
-    if (picked == null || picked.files.isEmpty) return;
+    if (picked.isEmpty) return;
 
-    final file = picked.files.first;
-    Uint8List? bytes = file.bytes;
-    if (bytes == null && file.path != null) {
-      bytes = await File(file.path!).readAsBytes();
-    }
-    if (!mounted) return;
-    if (bytes == null) {
-      _snack('Не удалось прочитать файл');
+    final file = picked.first;
+    final Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (error) {
+      if (!mounted) return;
+      _snack('Не удалось прочитать файл: $error');
       return;
     }
+    if (!mounted) return;
 
     try {
       final summary = await ref

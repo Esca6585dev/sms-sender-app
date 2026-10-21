@@ -74,6 +74,25 @@ Ugradylan belgi backend-e hem `markNumberAsSent` bilen bellenýär (best-effort)
 4. Progress we sanaçlar hakyky wagtda täzelenýär, **Стоп** bilen säkdirip bolýar.
 5. **Сброс** — topar statusyny arassalaýar; ⋮ menýu — "Сбросить все" / "Удалить все".
 
+## 4a. Täze dizaýn, istoriýa we statistika (2026-10-21)
+
+- **Shell** (`lib/app/app_shell.dart`): burger menýu (`AppDrawer`) + aşaky
+  `NavigationBar` bilen 4 bölüm: Рассылка, Группы, История, Статистика.
+  Her sahypanyň öz AppBar-y bar, `ShellMenuButton` çep tarapda menýuny açýar.
+- **Tema** (`lib/app/theme.dart`, `theme_mode_controller.dart`): Material 3,
+  light/dark/awto; saýlaw `SharedPreferences`-de saklanýar, menýudan üýtgedilýär.
+- **Рассылка** (`lib/features/send/send_page.dart`): habar meýdançasy, iki stat
+  kartoçkasy (jemi / ugradylan), gözleg, belgiler sanawy, "Отправить всем" FAB,
+  goşmaça hereketler ⋮ menýuda. Öňki `AddContactPage` → `lib/features/contacts/`,
+  öňki serwer istoriýasy → `ServerMessagesPage` (menýuda "Тексты на сервере").
+- **История** (`lib/features/history/`): her ugratma (topar / hemmesi / bir belgi)
+  ýerli ýazylýar: wagty, dowamlylygy, tekst, belgiler we her biriniň netijesi.
+  `CampaignLogController` + `SharedPrefsCampaignRepository` (indeks + her
+  kampaniýa aýratyn açar). Günler boýunça toparlanan sanaw, jikme-jik sahypa.
+- **Статистика** (`lib/features/stats/stats_page.dart`): şu gün / 7 gün / jemi /
+  ýalňyş / kampaniýa sany / toparlardaky belgiler, 7 günlük diagramma, çeşmeler
+  boýunça bölünişik, soňky ugratmalar. Hasaplama `CampaignStats.from()` (arassa Dart).
+
 ## 5. Testler
 
 ```
@@ -85,4 +104,6 @@ flutter test
 - `test/features/groups/group_batcher_test.dart` — 1000 → 10×100, galyndy
 - `test/features/groups/excel_contacts_parser_test.dart` — hakyky xlsx bilen
 - `test/features/groups/groups_controller_test.dart` — import, ugratma, stop, ýalňyş, sbros
+- `test/features/history/campaign_stats_test.dart` — statistika hasaplamalary, JSON
+- `test/features/history/campaign_log_controller_test.dart` — istoriýa ýazgysy, topar ugratmasynyň ýazylmagy
 - `test/widget_test.dart` — GroupsPage widget testleri
