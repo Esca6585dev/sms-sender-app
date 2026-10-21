@@ -129,6 +129,7 @@ flutter test
 - `test/features/groups/group_batcher_test.dart` — 1000 → 10×100, galyndy
 - `test/features/groups/excel_contacts_parser_test.dart` — hakyky xlsx bilen
 - `test/features/groups/groups_controller_test.dart` — import, ugratma, stop, ýalňyş, sbros
+- `test/features/groups/groups_queue_test.dart` — harp atlar, ady üýtgetmek, nobat, saýlama, bildirişden stop, balans parse
 - `test/features/history/campaign_stats_test.dart` — statistika hasaplamalary, JSON
 - `test/features/history/campaign_log_controller_test.dart` — istoriýa ýazgysy, topar ugratmasynyň ýazylmagy
 - `test/widget_test.dart` — GroupsPage widget testleri
