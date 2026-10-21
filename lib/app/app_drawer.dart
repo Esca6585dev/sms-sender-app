@@ -74,21 +74,21 @@ class AppDrawer extends ConsumerWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: SegmentedButton<ThemeMode>(
                       showSelectedIcon: false,
+                      style: const ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                      ),
                       segments: const [
                         ButtonSegment(
                           value: ThemeMode.system,
-                          icon: Icon(Icons.brightness_auto_outlined),
-                          label: Text('Авто'),
+                          label: Text('Авто', maxLines: 1),
                         ),
                         ButtonSegment(
                           value: ThemeMode.light,
-                          icon: Icon(Icons.light_mode_outlined),
-                          label: Text('Светлая'),
+                          label: Text('Светлая', maxLines: 1),
                         ),
                         ButtonSegment(
                           value: ThemeMode.dark,
-                          icon: Icon(Icons.dark_mode_outlined),
-                          label: Text('Тёмная'),
+                          label: Text('Тёмная', maxLines: 1),
                         ),
                       ],
                       selected: {mode},
