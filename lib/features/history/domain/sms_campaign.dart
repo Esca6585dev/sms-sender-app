@@ -1,6 +1,9 @@
+import 'package:sms_sender_app/l10n/strings.dart';
+
 /// Where a send run came from.
 enum CampaignSource {
   group,
+  serverGroup,
   all,
   single;
 
@@ -10,9 +13,10 @@ enum CampaignSource {
 
 extension CampaignSourcePresentation on CampaignSource {
   String get label => switch (this) {
-        CampaignSource.group => 'Группа',
-        CampaignSource.all => 'Все номера',
-        CampaignSource.single => 'Один номер',
+        CampaignSource.group => S.current.groupLabel,
+        CampaignSource.serverGroup => S.current.serverGroupLabel,
+        CampaignSource.all => S.current.allNumbers,
+        CampaignSource.single => S.current.singleNumber,
       };
 }
 

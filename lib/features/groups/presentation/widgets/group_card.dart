@@ -5,6 +5,7 @@ import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
 import 'package:sms_sender_app/features/groups/presentation/widgets/status_chip.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 enum _CardAction { open, rename, dequeue, remove }
 
@@ -63,25 +64,27 @@ class _GroupCardState extends State<GroupCard> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final g = widget.group;
     final c = g.counters;
     final status = g.statusFor(isActive: widget.isActive);
     final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
+    final statusColor = status.colorOf(t);
     final queued = widget.queuePosition != null;
     final canSend =
         widget.actionsEnabled && c.remaining > 0 && !queued && !widget.isActive;
     final canReset =
         widget.actionsEnabled && !widget.isActive && (c.sent > 0 || c.failed > 0);
     final sendLabel = widget.isActive
-        ? 'Отправляется…'
+        ? s.sending
         : queued
-            ? 'В очереди #${widget.queuePosition}'
+            ? s.inQueue(widget.queuePosition!)
             : c.failed > 0 && c.pending == 0
-                ? 'Повторить (${c.failed})'
+                ? '${s.retryFailed} (${c.failed})'
                 : c.sent > 0
-                    ? 'Продолжить (${c.remaining})'
-                    : 'Отправить';
+                    ? '${s.continueSending} (${c.remaining})'
+                    : s.send;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
@@ -127,16 +130,13 @@ class _GroupCardState extends State<GroupCard> {
                             ),
                             if (queued) ...[
                               const SizedBox(width: 8),
-                              _Badge(
-                                '#${widget.queuePosition}',
-                                color: t.accent,
-                              ),
+                              _Badge('#${widget.queuePosition}', color: t.accent),
                             ],
                           ],
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${g.rangeLabel} · ${c.total} номеров'
+                          '${g.rangeLabel} · ${s.numbersCount(c.total)}'
                           '${widget.costLabel != null ? ' · ${widget.costLabel}' : ''}',
                           style: TextStyle(
                             fontSize: 12,
@@ -149,7 +149,7 @@ class _GroupCardState extends State<GroupCard> {
                   GroupStatusChip(status: status),
                   PopupMenuButton<_CardAction>(
                     enabled: widget.actionsEnabled,
-                    tooltip: 'Действия',
+                    tooltip: s.more,
                     onSelected: (action) {
                       switch (action) {
                         case _CardAction.open:
@@ -163,38 +163,38 @@ class _GroupCardState extends State<GroupCard> {
                       }
                     },
                     itemBuilder: (_) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: _CardAction.open,
                         child: ListTile(
                           dense: true,
-                          leading: Icon(Icons.list),
-                          title: Text('Открыть список'),
+                          leading: const Icon(Icons.list),
+                          title: Text(s.openList),
                         ),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: _CardAction.rename,
                         child: ListTile(
                           dense: true,
-                          leading: Icon(Icons.edit_outlined),
-                          title: Text('Переименовать'),
+                          leading: const Icon(Icons.edit_outlined),
+                          title: Text(s.rename),
                         ),
                       ),
                       if (queued)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: _CardAction.dequeue,
                           child: ListTile(
                             dense: true,
-                            leading: Icon(Icons.playlist_remove),
-                            title: Text('Убрать из очереди'),
+                            leading: const Icon(Icons.playlist_remove),
+                            title: Text(s.removeFromQueue),
                           ),
                         ),
                       PopupMenuItem(
                         value: _CardAction.remove,
                         enabled: !widget.isActive,
-                        child: const ListTile(
+                        child: ListTile(
                           dense: true,
-                          leading: Icon(Icons.delete_outline, color: Colors.red),
-                          title: Text('Удалить группу'),
+                          leading: Icon(Icons.delete_outline, color: t.danger),
+                          title: Text(s.deleteGroup),
                         ),
                       ),
                     ],
@@ -207,7 +207,7 @@ class _GroupCardState extends State<GroupCard> {
                 child: LinearProgressIndicator(
                   value: c.progress,
                   minHeight: 8,
-                  color: status.color,
+                  color: statusColor,
                   backgroundColor: scheme.surfaceContainerHighest,
                 ),
               ),
@@ -218,7 +218,7 @@ class _GroupCardState extends State<GroupCard> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Отправлено ${c.sent} / ${c.total}',
+                      s.sentOf(c.sent, c.total),
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
@@ -229,7 +229,7 @@ class _GroupCardState extends State<GroupCard> {
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: status.color,
+                        color: statusColor,
                       ),
                     ),
                   ],
@@ -239,9 +239,9 @@ class _GroupCardState extends State<GroupCard> {
               Wrap(
                 spacing: 14,
                 children: [
-                  _Counter('Осталось', c.remaining, t.warning),
-                  _Counter('Ошибок', c.failed, t.danger),
-                  if (widget.isActive) _Counter('Идёт', c.sending, t.accent),
+                  _Counter(s.remainingLabel, c.remaining, t.warning),
+                  _Counter(s.failedLabel, c.failed, t.danger),
+                  if (widget.isActive) _Counter(s.runningLabel, c.sending, t.accent),
                 ],
               ),
               const SizedBox(height: 6),
@@ -249,7 +249,7 @@ class _GroupCardState extends State<GroupCard> {
                 _NumbersList(group: g)
               else
                 Text(
-                  _preview(),
+                  _preview(s),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
@@ -263,7 +263,7 @@ class _GroupCardState extends State<GroupCard> {
                     size: 18,
                   ),
                   label: Text(
-                    _expanded ? 'Скрыть номера' : 'Показать номера (${c.total})',
+                    _expanded ? s.hideNumbers : '${s.showNumbers} (${c.total})',
                   ),
                 ),
               ),
@@ -289,7 +289,7 @@ class _GroupCardState extends State<GroupCard> {
                     OutlinedButton.icon(
                       onPressed: canReset ? widget.onReset : null,
                       icon: const Icon(Icons.restart_alt, size: 18),
-                      label: const Text('Сброс'),
+                      label: Text(s.reset),
                     ),
                   ],
                 ),
@@ -301,11 +301,11 @@ class _GroupCardState extends State<GroupCard> {
     );
   }
 
-  String _preview() {
+  String _preview(S s) {
     final g = widget.group;
     final shown = g.recipients.take(_previewCount).map((r) => r.phone).join(', ');
     final rest = g.total - _previewCount;
-    return rest > 0 ? '$shown … ещё $rest' : shown;
+    return rest > 0 ? '$shown ${s.more_(rest)}' : shown;
   }
 }
 

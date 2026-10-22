@@ -1,3 +1,5 @@
+import 'package:sms_sender_app/l10n/strings.dart';
+
 import 'sms_recipient.dart';
 
 /// Aggregated state of a group, derived from its recipients.
@@ -137,11 +139,11 @@ class SmsGroup {
     return chars.isEmpty ? '?' : chars.join();
   }
 
-  String get defaultTitle => 'Группа $letter';
+  String get defaultTitle => S.current.groupDefaultName(letter);
 
   String get title => name ?? defaultTitle;
 
-  String get rangeLabel => '№ $startNumber–$endNumber';
+  String get rangeLabel => S.current.rangeLabel(startNumber, endNumber);
 
   GroupStatus statusFor({required bool isActive}) {
     if (isActive) return GroupStatus.inProgress;

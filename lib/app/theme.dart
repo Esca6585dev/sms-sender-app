@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:sms_sender_app/app/theme_palettes.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// The four visual styles the operator can pick in the drawer. Every style
 /// has a light and a dark variant; the user also chooses light / dark / auto.
@@ -23,10 +24,10 @@ extension AppStylePresentation on AppStyle {
       };
 
   String get description => switch (this) {
-        AppStyle.softGlass => 'Мягкий фон, стеклянные карточки',
-        AppStyle.boldBrand => 'Тёмно-синий верх, красная кнопка',
-        AppStyle.cleanMono => 'Чёрно-белый минимализм, тонкие линии',
-        AppStyle.darkNeon => 'Тёмный фон, неоновый акцент',
+        AppStyle.softGlass => S.current.styleSoftGlass,
+        AppStyle.boldBrand => S.current.styleBoldBrand,
+        AppStyle.cleanMono => S.current.styleCleanMono,
+        AppStyle.darkNeon => S.current.styleDarkNeon,
       };
 
   /// Bundled Google Fonts (all with Cyrillic glyphs), see pubspec.yaml.

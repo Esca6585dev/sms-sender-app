@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:another_telephony/telephony.dart';
 
+import 'package:sms_sender_app/l10n/strings.dart';
+
 /// Outcome of a single SMS send attempt.
 class SmsSendResult {
   const SmsSendResult.success()
@@ -89,6 +91,6 @@ class TelephonySmsSender implements SmsSender {
 
     return confirmed
         ? const SmsSendResult.success()
-        : const SmsSendResult.failure('Нет подтверждения отправки (таймаут)');
+        : SmsSendResult.failure(S.current.noSendConfirmation);
   }
 }

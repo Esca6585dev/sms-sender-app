@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/database.dart' as database;
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Message texts stored on the backend (legacy history screen).
 class ServerMessagesPage extends StatefulWidget {
@@ -11,91 +13,92 @@ class ServerMessagesPage extends StatefulWidget {
 }
 
 class _ServerMessagesPageState extends State<ServerMessagesPage> {
-  List<Map<String, Object?>> allMessages = [];
-  List<Map<String, Object?>> filteredMessages = [];
-  String searchQuery = '';
-  final db = database.ApiService();
-  bool isLoading = false;
+  final database.ApiService db = database.ApiService();
+
+  List<database.Message> _all = const [];
+  String _query = '';
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    loadMessages().then((_) {
-    });
+    _load();
   }
 
-  void filterMessages() {
-    if (searchQuery.isEmpty) {
-      filteredMessages = allMessages;
-    } else {
-      filteredMessages = allMessages.where((msg) {
-        final text = msg['text'].toString().toLowerCase();
-        return text.contains(searchQuery.toLowerCase());
-      }).toList();
+  List<database.Message> get _filtered {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _all;
+    return [
+      for (final m in _all)
+        if (m.messageText.toLowerCase().contains(q)) m,
+    ];
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await db.getMessages();
+      if (!mounted) return;
+      setState(() {
+        _all = data;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
     }
   }
 
-  Future<void> loadMessages() async {
-    setState(() {
-      isLoading = true;
-    });
-
-    final data = await db.getMessages();
+  Future<void> _clearAll() async {
+    final s = S.of(context);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.deleteEverything),
+        content: Text(s.cannotUndo),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.delete),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _loading = true);
+    await db.deleteAllMessages();
+    await _load();
     if (!mounted) return;
-
-    setState(() {
-      allMessages = data
-          .map((e) => {"id": e.id, "text": e.messageText, "date": e.date})
-          .toList();
-    });
-
-    filterMessages();
-
-    setState(() => isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(s.historyCleared)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
+    final items = _filtered;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Истории отправленные'),
+        title: Text(s.serverTextsTitle),
         actions: [
           IconButton(
+            tooltip: s.deleteAll,
             icon: const Icon(Icons.delete_sweep),
-            onPressed: () async {
-              if (!mounted) return;
-              final dialogContext = context;
-              final confirm = await showDialog(
-                context: dialogContext,
-                builder: (_) => AlertDialog(
-                  title: const Text("Удалить всё?"),
-                  content: const Text("Это действие нельзя отменить"),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text("Отмена"),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text("Удалить"),
-                    ),
-                  ],
-                ),
-              );
-
-              if (!mounted) return;
-              if (confirm == true) {
-                setState(() => isLoading = true);
-
-                await db.deleteAllMessages();
-                await loadMessages();
-                if (!mounted) return;
-
-                ScaffoldMessenger.of(dialogContext).showSnackBar(
-                  const SnackBar(content: Text('История очищена')),
-                );
-              }
-            },
+            onPressed: _all.isEmpty ? null : _clearAll,
           ),
         ],
       ),
@@ -104,60 +107,42 @@ class _ServerMessagesPageState extends State<ServerMessagesPage> {
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
-              keyboardType: TextInputType.text,
               decoration: InputDecoration(
-                hintText: 'Поиск сообщений...',
+                hintText: s.searchMessages,
                 prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                isDense: true,
               ),
-              onChanged: (value) {
-                searchQuery = value;
-                filterMessages();
-                setState(() {});
-              },
+              onChanged: (value) => setState(() => _query = value),
             ),
           ),
-
           Expanded(
-            child: isLoading
+            child: _loading
                 ? const Center(child: CircularProgressIndicator())
-              : filteredMessages.isEmpty
-                ? const Center(child: Text("История пуста"))
-                : ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: filteredMessages.length,
-                    itemBuilder: (context, index) {
-                      final data = filteredMessages[index];
-
-                      return Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: ListTile(
-                          leading: const Icon(
-                            Icons.message,
-                            color: Colors.indigo,
-                          ),
-                          title: Text((data['text'] as String?) ?? ''),
-                          subtitle: Text((data['date'] as String?) ?? ''),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () async {
-                              final id = data['id'] as int?;
-                              if (id != null) {
-                                await db.deleteMessage(id);
-                                await loadMessages();
-                                filterMessages();
-                                setState(() {});
-                              }
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                : items.isEmpty
+                    ? Center(child: Text(s.historyEmpty))
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final m = items[index];
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            child: ListTile(
+                              leading: Icon(Icons.message_outlined, color: t.accent),
+                              title: Text(m.messageText),
+                              subtitle: Text(m.date),
+                              trailing: IconButton(
+                                tooltip: s.delete,
+                                icon: Icon(Icons.delete_outline, color: t.danger),
+                                onPressed: () async {
+                                  await db.deleteMessage(m.id);
+                                  await _load();
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
           ),
         ],
       ),

@@ -1,4 +1,5 @@
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 const Object _unset = Object();
 
@@ -21,14 +22,11 @@ class ImportSummary {
   final int totalRows;
 
   String describe() {
-    if (imported == 0) {
-      return 'В файле не найдено ни одного корректного номера (строк: $totalRows)';
-    }
-    final buffer = StringBuffer(
-      'Импортировано: $imported номеров → групп: $groupsCreated',
-    );
-    if (invalid > 0) buffer.write(' · пропущено некорректных: $invalid');
-    if (duplicates > 0) buffer.write(' · дубликатов: $duplicates');
+    final s = S.current;
+    if (imported == 0) return s.importNothing(totalRows);
+    final buffer = StringBuffer(s.importResult(imported, groupsCreated));
+    if (invalid > 0) buffer.write(s.importInvalid(invalid));
+    if (duplicates > 0) buffer.write(s.importDuplicates(duplicates));
     return buffer.toString();
   }
 }
@@ -45,9 +43,15 @@ class GroupsState {
     this.lastImport,
     this.queue = const [],
     this.selectedIds = const {},
+    this.pausedUntil,
   });
 
   final List<SmsGroup> groups;
+
+  /// Set while the send loop waits for the phone's SMS limit to clear.
+  final DateTime? pausedUntil;
+
+  bool get isPaused => pausedUntil != null;
 
   /// Groups waiting to be sent after [activeGroupId], in order.
   final List<String> queue;
@@ -128,8 +132,12 @@ class GroupsState {
     Object? lastImport = _unset,
     List<String>? queue,
     Set<String>? selectedIds,
+    Object? pausedUntil = _unset,
   }) {
     return GroupsState(
+      pausedUntil: identical(pausedUntil, _unset)
+          ? this.pausedUntil
+          : pausedUntil as DateTime?,
       groups: groups ?? this.groups,
       isLoading: isLoading ?? this.isLoading,
       isImporting: isImporting ?? this.isImporting,

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 extension CampaignSourceIcon on CampaignSource {
   IconData get icon => switch (this) {
         CampaignSource.group => Icons.group_work_outlined,
+        CampaignSource.serverGroup => Icons.cloud_outlined,
         CampaignSource.all => Icons.send_outlined,
         CampaignSource.single => Icons.person_outline,
       };
@@ -28,17 +31,19 @@ class CampaignCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final s = summary;
-    final hasErrors = s.failed > 0;
-    final barColor = hasErrors ? Colors.orange.shade700 : Colors.green;
+    final c = summary;
+    final hasErrors = c.failed > 0;
+    final barColor = hasErrors ? t.warning : t.success;
     final when = showDate
-        ? DateFormatting.dateTime(s.startedAt)
-        : DateFormatting.time(s.startedAt);
+        ? DateFormatting.dateTime(c.startedAt)
+        : DateFormatting.time(c.startedAt);
 
     return Card(
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(t.radius),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -51,10 +56,10 @@ class CampaignCard extends StatelessWidget {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.12),
+                      color: t.accent.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(s.source.icon, color: scheme.primary, size: 22),
+                    child: Icon(c.source.icon, color: t.accent, size: 22),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -62,7 +67,7 @@ class CampaignCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          s.sourceLabel,
+                          c.sourceLabel,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -72,7 +77,7 @@ class CampaignCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '$when · ${s.total} номеров',
+                          '$when · ${s.numbersCount(c.total)}',
                           style: TextStyle(
                             fontSize: 12,
                             color: scheme.onSurfaceVariant,
@@ -85,7 +90,7 @@ class CampaignCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '${s.sent} / ${s.total}',
+                        '${c.sent} / ${c.total}',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -94,8 +99,8 @@ class CampaignCard extends StatelessWidget {
                       ),
                       if (hasErrors)
                         Text(
-                          'ошибок: ${s.failed}',
-                          style: const TextStyle(fontSize: 11, color: Colors.red),
+                          s.errorsN(c.failed),
+                          style: TextStyle(fontSize: 11, color: t.danger),
                         ),
                     ],
                   ),
@@ -103,7 +108,7 @@ class CampaignCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                s.message,
+                c.message,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 13, color: scheme.onSurface),
@@ -112,7 +117,7 @@ class CampaignCard extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
                 child: LinearProgressIndicator(
-                  value: s.successRate,
+                  value: c.successRate,
                   minHeight: 6,
                   color: barColor,
                   backgroundColor: scheme.surfaceContainerHighest,

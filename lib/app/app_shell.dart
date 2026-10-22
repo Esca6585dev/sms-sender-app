@@ -7,16 +7,17 @@ import 'package:sms_sender_app/features/groups/presentation/groups_page.dart';
 import 'package:sms_sender_app/features/history/presentation/history_page.dart';
 import 'package:sms_sender_app/features/send/send_page.dart';
 import 'package:sms_sender_app/features/stats/stats_page.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Top-level sections reachable from the bottom bar and the drawer.
 enum AppTab { send, groups, history, stats }
 
 extension AppTabPresentation on AppTab {
   String get label => switch (this) {
-        AppTab.send => 'Рассылка',
-        AppTab.groups => 'Группы',
-        AppTab.history => 'История',
-        AppTab.stats => 'Статистика',
+        AppTab.send => S.current.tabSend,
+        AppTab.groups => S.current.tabGroups,
+        AppTab.history => S.current.tabHistory,
+        AppTab.stats => S.current.tabStats,
       };
 
   IconData get icon => switch (this) {
@@ -85,7 +86,7 @@ class ShellMenuButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       icon: const Icon(Icons.menu_rounded),
-      tooltip: 'Меню',
+      tooltip: S.of(context).menu,
       onPressed: () => shellScaffoldKey.currentState?.openDrawer(),
     );
   }

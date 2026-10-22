@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
 import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
 import 'package:sms_sender_app/features/history/presentation/widgets/campaign_card.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Full record of one send run: message, timing, counters and every number.
 class CampaignDetailPage extends ConsumerStatefulWidget {
@@ -29,17 +31,18 @@ class _CampaignDetailPageState extends ConsumerState<CampaignDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return FutureBuilder<SmsCampaign?>(
       future: _campaign,
       builder: (context, snapshot) {
         final campaign = snapshot.data;
         return Scaffold(
           appBar: AppBar(
-            title: Text(campaign?.summary.sourceLabel ?? 'Рассылка'),
+            title: Text(campaign?.summary.sourceLabel ?? s.campaign),
             actions: [
               if (campaign != null)
                 IconButton(
-                  tooltip: 'Удалить запись',
+                  tooltip: s.deleteRecord,
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () => _delete(campaign.summary.id),
                 ),
@@ -49,7 +52,7 @@ class _CampaignDetailPageState extends ConsumerState<CampaignDetailPage> {
             ConnectionState.waiting =>
               const Center(child: CircularProgressIndicator()),
             _ => campaign == null
-                ? const Center(child: Text('Запись не найдена'))
+                ? Center(child: Text(s.recordNotFound))
                 : _CampaignBody(campaign: campaign),
           },
         );
@@ -58,20 +61,24 @@ class _CampaignDetailPageState extends ConsumerState<CampaignDetailPage> {
   }
 
   Future<void> _delete(String id) async {
+    final s = S.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Удалить запись?'),
-        content: const Text('Запись об этой рассылке будет удалена из истории.'),
+        title: Text(s.deleteRecordTitle),
+        content: Text(s.deleteRecordBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
+            child: Text(s.cancel),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Colors.white,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Удалить'),
+            child: Text(s.delete),
           ),
         ],
       ),
@@ -89,11 +96,15 @@ class _CampaignBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final s = campaign.summary;
-    final info = SmsMessageInfo.analyze(s.message);
-    final hasErrors = s.failed > 0;
-    final barColor = hasErrors ? Colors.orange.shade700 : Colors.green;
+    final c = campaign.summary;
+    final info = SmsMessageInfo.analyze(c.message);
+    final hasErrors = c.failed > 0;
+    final barColor = hasErrors ? t.warning : t.success;
+    final encoding =
+        info.encoding == SmsEncoding.gsm7 ? s.encodingGsm : s.encodingUnicode;
 
     return CustomScrollView(
       slivers: [
@@ -111,11 +122,11 @@ class _CampaignBody extends StatelessWidget {
                       children: [
                         Row(
                           children: [
-                            Icon(s.source.icon, color: scheme.primary),
+                            Icon(c.source.icon, color: t.accent),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '${s.source.label} · ${s.sourceLabel}',
+                                '${c.source.label} · ${c.sourceLabel}',
                                 style: const TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
@@ -127,24 +138,24 @@ class _CampaignBody extends StatelessWidget {
                         const SizedBox(height: 10),
                         _InfoRow(
                           Icons.schedule,
-                          'Начало',
-                          DateFormatting.dateTime(s.startedAt),
+                          s.started,
+                          DateFormatting.dateTime(c.startedAt),
                         ),
                         _InfoRow(
                           Icons.timer_outlined,
-                          'Длительность',
-                          DateFormatting.duration(s.duration),
+                          s.duration,
+                          DateFormatting.duration(c.duration),
                         ),
                         _InfoRow(
                           Icons.sms_outlined,
-                          'Частей на номер',
-                          '${info.parts} (${info.encoding == SmsEncoding.gsm7 ? 'GSM-7' : 'Unicode'})',
+                          s.partsPerNumber,
+                          '${info.parts} ($encoding)',
                         ),
                         const SizedBox(height: 10),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
-                            value: s.successRate,
+                            value: c.successRate,
                             minHeight: 8,
                             color: barColor,
                             backgroundColor: scheme.surfaceContainerHighest,
@@ -154,12 +165,12 @@ class _CampaignBody extends StatelessWidget {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            _Counter('Номеров', s.total, scheme.onSurface),
-                            _Counter('Отправлено', s.sent, Colors.green),
+                            _Counter(s.numbersLabel, c.total, scheme.onSurface),
+                            _Counter(s.sentLabel, c.sent, t.success),
                             _Counter(
-                              'Ошибок',
-                              s.failed,
-                              hasErrors ? Colors.red : scheme.onSurfaceVariant,
+                              s.errorsLabel,
+                              c.failed,
+                              hasErrors ? t.danger : scheme.onSurfaceVariant,
                             ),
                           ],
                         ),
@@ -175,7 +186,7 @@ class _CampaignBody extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Текст сообщения',
+                          s.messageText,
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -184,7 +195,7 @@ class _CampaignBody extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         SelectableText(
-                          s.message,
+                          c.message,
                           style: const TextStyle(fontSize: 14, height: 1.35),
                         ),
                       ],
@@ -194,7 +205,7 @@ class _CampaignBody extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 16, 4, 6),
                   child: Text(
-                    'Номера (${campaign.recipients.length})',
+                    s.numbersN(campaign.recipients.length),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -218,7 +229,7 @@ class _CampaignBody extends StatelessWidget {
                   dense: true,
                   leading: Icon(
                     r.sent ? Icons.check_circle : Icons.error,
-                    color: r.sent ? Colors.green : Colors.red,
+                    color: r.sent ? t.success : t.danger,
                   ),
                   title: Text(
                     r.phone,
@@ -229,7 +240,7 @@ class _CampaignBody extends StatelessWidget {
                           r.error!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.red, fontSize: 12),
+                          style: TextStyle(color: t.danger, fontSize: 12),
                         )
                       : r.name.isNotEmpty
                           ? Text(r.name)

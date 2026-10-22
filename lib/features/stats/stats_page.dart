@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
+import 'package:sms_sender_app/features/groups/domain/group_source.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
 import 'package:sms_sender_app/features/history/presentation/campaign_detail_page.dart';
 import 'package:sms_sender_app/features/history/presentation/widgets/campaign_card.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 import 'package:sms_sender_app/shared/widgets/stat_tile.dart';
 
 /// Totals, a 7-day chart, a breakdown by source and the latest runs.
@@ -16,16 +19,21 @@ class StatsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
     final log = ref.watch(campaignLogProvider);
-    final groups = ref.watch(groupsControllerProvider);
+    final excel = ref.watch(groupsControllerProvider(GroupSource.excel));
+    final server = ref.watch(groupsControllerProvider(GroupSource.server));
     final stats = log.stats();
     final scheme = Theme.of(context).colorScheme;
     final recent = log.campaigns.take(5).toList();
+    final groupNumbers = excel.totals.total + server.totals.total;
+    final groupCount = excel.groups.length + server.groups.length;
 
     return Scaffold(
       appBar: AppBar(
         leading: const ShellMenuButton(),
-        title: const Text('Статистика'),
+        title: Text(s.statsTitle),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
@@ -34,20 +42,20 @@ class StatsPage extends ConsumerWidget {
             children: [
               Expanded(
                 child: StatTile(
-                  label: 'Сегодня',
+                  label: s.todayLabel,
                   value: '${stats.sentToday}',
-                  subtitle: 'рассылок: ${stats.campaignsToday}',
+                  subtitle: s.campaignsN(stats.campaignsToday),
                   icon: Icons.today_outlined,
-                  color: Colors.orange.shade800,
+                  color: t.warning,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: StatTile(
-                  label: 'За 7 дней',
+                  label: s.last7days,
                   value: '${stats.sentLast7Days}',
                   icon: Icons.date_range_outlined,
-                  color: scheme.primary,
+                  color: t.accent,
                 ),
               ),
             ],
@@ -57,20 +65,20 @@ class StatsPage extends ConsumerWidget {
             children: [
               Expanded(
                 child: StatTile(
-                  label: 'Всего отправлено',
+                  label: s.totalSent,
                   value: '${stats.totalSent}',
-                  subtitle: 'успешно ${(stats.successRate * 100).round()}%',
+                  subtitle: s.successRate((stats.successRate * 100).round()),
                   icon: Icons.check_circle_outline,
-                  color: Colors.green,
+                  color: t.success,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: StatTile(
-                  label: 'Ошибок',
+                  label: s.errorsLabel,
                   value: '${stats.totalFailed}',
                   icon: Icons.error_outline,
-                  color: Colors.red,
+                  color: t.danger,
                 ),
               ),
             ],
@@ -80,7 +88,7 @@ class StatsPage extends ConsumerWidget {
             children: [
               Expanded(
                 child: StatTile(
-                  label: 'Рассылок',
+                  label: s.campaignsLabel,
                   value: '${stats.totalCampaigns}',
                   icon: Icons.campaign_outlined,
                   color: Colors.deepPurple,
@@ -89,9 +97,9 @@ class StatsPage extends ConsumerWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: StatTile(
-                  label: 'Номеров в группах',
-                  value: '${groups.totals.total}',
-                  subtitle: 'групп: ${groups.groups.length}',
+                  label: s.numbersInGroups,
+                  value: '$groupNumbers',
+                  subtitle: s.groupsN(groupCount),
                   icon: Icons.group_work_outlined,
                   color: Colors.teal,
                 ),
@@ -99,7 +107,7 @@ class StatsPage extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 14),
-          _SectionTitle('Последние 7 дней'),
+          _SectionTitle(s.last7days),
           Card(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
@@ -107,13 +115,13 @@ class StatsPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SectionTitle('По источникам'),
+          _SectionTitle(s.bySource),
           Card(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
               child: stats.totalSent == 0
                   ? Text(
-                      'Пока нет отправленных SMS',
+                      s.noSentYet,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     )
                   : Column(
@@ -131,7 +139,7 @@ class StatsPage extends ConsumerWidget {
           ),
           if (recent.isNotEmpty) ...[
             const SizedBox(height: 14),
-            _SectionTitle('Последние рассылки'),
+            _SectionTitle(s.latestCampaigns),
             for (final c in recent)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -184,6 +192,7 @@ class _WeekChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final t = AppStyleTokens.of(context);
     final max = stats.maxDaySent;
 
     return Row(
@@ -209,7 +218,7 @@ class _WeekChart extends StatelessWidget {
                   margin: const EdgeInsets.symmetric(horizontal: 6),
                   decoration: BoxDecoration(
                     color: day.sent > 0
-                        ? scheme.primary
+                        ? t.accent
                         : scheme.outlineVariant.withValues(alpha: 0.6),
                     borderRadius: BorderRadius.circular(6),
                   ),
@@ -241,15 +250,21 @@ class _SourceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final t = AppStyleTokens.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(source.icon, size: 20, color: scheme.primary),
+          Icon(source.icon, size: 20, color: t.accent),
           const SizedBox(width: 10),
           SizedBox(
-            width: 96,
-            child: Text(source.label, style: const TextStyle(fontSize: 13)),
+            width: 110,
+            child: Text(
+              source.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13),
+            ),
           ),
           Expanded(
             child: ClipRRect(

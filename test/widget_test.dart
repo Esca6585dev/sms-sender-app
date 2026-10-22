@@ -15,7 +15,7 @@ import 'features/groups/fakes.dart';
 
 Widget buildApp(InMemoryGroupsRepository repository) => ProviderScope(
       overrides: [
-        groupsRepositoryProvider.overrideWithValue(repository),
+        groupsRepositoryProvider.overrideWith((ref, source) => repository),
         smsSenderProvider.overrideWithValue(FakeSmsSender()),
         excelParserProvider.overrideWithValue(FakeExcelParser().call),
         sentNumbersSyncProvider.overrideWithValue(null),

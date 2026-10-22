@@ -10,10 +10,12 @@ import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
+import 'package:sms_sender_app/features/groups/domain/group_source.dart';
 import 'package:sms_sender_app/features/groups/presentation/group_actions.dart';
 import 'package:sms_sender_app/features/groups/presentation/group_detail_page.dart';
 import 'package:sms_sender_app/features/groups/presentation/widgets/group_card.dart';
 import 'package:sms_sender_app/features/groups/presentation/widgets/groups_summary_panel.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 import 'package:sms_sender_app/shared/providers/app_providers.dart';
 import 'package:sms_sender_app/shared/widgets/message_composer.dart';
 
@@ -21,8 +23,8 @@ enum _PageAction { resetAll, clearAll }
 
 enum _ImportMode { append, replace }
 
-/// List of groups created from an Excel import, with per-group send/reset,
-/// global progress and the shared message composer.
+/// Excel groups: import, per-group send/reset, queue, global progress and the
+/// shared message composer. Everything scrolls as one list.
 class GroupsPage extends ConsumerStatefulWidget {
   const GroupsPage({super.key});
 
@@ -31,134 +33,146 @@ class GroupsPage extends ConsumerStatefulWidget {
 }
 
 class _GroupsPageState extends ConsumerState<GroupsPage> {
+  static const GroupSource _source = GroupSource.excel;
+
   bool _errorDialogOpen = false;
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     ref.listen<String?>(
-      groupsControllerProvider.select((s) => s.errorMessage),
+      groupsControllerProvider(_source).select((st) => st.errorMessage),
       (previous, next) {
         if (next != null && next != previous) _showError(next);
       },
     );
 
-    final state = ref.watch(groupsControllerProvider);
+    final state = ref.watch(groupsControllerProvider(_source));
     final messageController = ref.watch(messageControllerProvider);
     final delayMs = ref.watch(sendDelayProvider);
     final balance = ref.watch(balanceProvider);
     final parts = SmsMessageInfo.analyze(messageController.text).parts;
     final partsForCost = parts == 0 ? 1 : parts;
-    final actions = GroupActions(context, ref);
-    final notifier = ref.read(groupsControllerProvider.notifier);
+    final actions = GroupActions(context, ref, source: _source);
+    final notifier = ref.read(groupsControllerProvider(_source).notifier);
 
     return Scaffold(
       appBar: state.hasSelection
           ? AppBar(
               leading: IconButton(
-                tooltip: 'Снять выделение',
+                tooltip: s.clearSelection,
                 icon: const Icon(Icons.close),
                 onPressed: notifier.clearSelection,
               ),
-              title: Text('Выбрано: ${state.selectedIds.length}'),
+              title: Text(s.selected(state.selectedIds.length)),
               actions: [
                 IconButton(
-                  tooltip: 'Выбрать все',
+                  tooltip: s.selectAll,
                   icon: const Icon(Icons.select_all),
                   onPressed: notifier.selectAllPending,
                 ),
                 IconButton(
-                  tooltip: 'Отправить выбранные',
+                  tooltip: s.sendSelected,
                   icon: const Icon(Icons.send),
                   onPressed: state.isImporting ? null : actions.sendSelected,
                 ),
               ],
             )
           : AppBar(
-        leading: const ShellMenuButton(),
-        title: const Text('Группы рассылки'),
-        actions: [
-          IconButton(
-            tooltip: 'Импорт из Excel',
-            icon: const Icon(Icons.upload_file),
-            onPressed: state.isBusy ? null : _importExcel,
-          ),
-          PopupMenuButton<_PageAction>(
-            enabled: !state.isBusy && !state.isEmpty,
-            tooltip: 'Сброс',
-            onSelected: (action) => _onPageAction(action, actions),
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: _PageAction.resetAll,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.restart_alt),
-                  title: Text('Сбросить статусы всех групп'),
+              leading: const ShellMenuButton(),
+              title: Text(s.groupsTitle),
+              actions: [
+                IconButton(
+                  tooltip: s.importExcel,
+                  icon: const Icon(Icons.upload_file),
+                  onPressed: state.isBusy ? null : _importExcel,
                 ),
-              ),
-              PopupMenuItem(
-                value: _PageAction.clearAll,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.delete_sweep, color: Colors.red),
-                  title: Text('Удалить все группы'),
+                PopupMenuButton<_PageAction>(
+                  enabled: !state.isBusy && !state.isEmpty,
+                  tooltip: s.reset,
+                  onSelected: (action) => _onPageAction(action, actions),
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: _PageAction.resetAll,
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.restart_alt),
+                        title: Text(s.resetAllStatuses),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: _PageAction.clearAll,
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(
+                          Icons.delete_sweep,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        title: Text(s.deleteAllGroups),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-        ],
-      ),
+              ],
+            ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-              child: Card(
-                elevation: 3,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  child: MessageComposer(
-                    controller: messageController,
-                    enabled: !state.isSending,
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                    child: MessageComposer(
+                      controller: messageController,
+                      enabled: !state.isSending,
+                    ),
                   ),
                 ),
               ),
             ),
             if (state.isImporting)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
-                child: Column(
-                  children: [
-                    LinearProgressIndicator(),
-                    SizedBox(height: 6),
-                    Text('Импорт Excel…', style: TextStyle(color: Colors.grey)),
-                  ],
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: Column(
+                    children: [
+                      const LinearProgressIndicator(),
+                      const SizedBox(height: 6),
+                      Text(
+                        s.importing,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             if (!state.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-                child: GroupsSummaryPanel(
-                  state: state,
-                  delayMs: delayMs,
-                  onDelayChanged: (ms) =>
-                      ref.read(sendDelayProvider.notifier).select(ms),
-                  onSendAll: actions.sendAll,
-                  onStop: actions.stop,
-                  balance: balance,
-                  onCheckBalance: () =>
-                      ref.read(balanceProvider.notifier).checkViaSms(),
-                  onDequeue: (id) {
-                    final group = state.groupById(id);
-                    if (group != null) actions.dequeue(group);
-                  },
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: GroupsSummaryPanel(
+                    state: state,
+                    delayMs: delayMs,
+                    onDelayChanged: (ms) =>
+                        ref.read(sendDelayProvider.notifier).select(ms),
+                    onSendAll: actions.sendAll,
+                    onStop: actions.stop,
+                    onResumeNow: actions.resumeNow,
+                    balance: balance,
+                    onCheckBalance: () =>
+                        ref.read(balanceProvider.notifier).checkViaSms(),
+                    onDequeue: (id) {
+                      final group = state.groupById(id);
+                      if (group != null) actions.dequeue(group);
+                    },
+                  ),
                 ),
               ),
-            Expanded(
-              child: _buildBody(state, actions, balance, partsForCost),
-            ),
+            _buildBody(state, actions, balance, partsForCost),
           ],
         ),
       ),
@@ -172,44 +186,53 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
     int partsForCost,
   ) {
     if (state.isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
     if (state.isEmpty) {
-      return _EmptyGroups(onImport: state.isBusy ? null : _importExcel);
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _EmptyGroups(onImport: state.isBusy ? null : _importExcel),
+      );
     }
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
-      itemCount: state.groups.length,
-      itemBuilder: (context, index) {
-        final group = state.groups[index];
-        final c = group.counters;
-        return GroupCard(
-          key: ValueKey(group.id),
-          group: group,
-          isActive: state.activeGroupId == group.id,
-          actionsEnabled: !state.isImporting,
-          queuePosition: state.queuePosition(group.id),
-          selectionMode: state.hasSelection,
-          selected: state.isSelected(group.id),
-          onToggleSelected: () => ref
-              .read(groupsControllerProvider.notifier)
-              .toggleSelected(group.id),
-          onDequeue: () => actions.dequeue(group),
-          onRename: () => actions.rename(group),
-          costLabel: c.remaining > 0
-              ? '≈ ${formatManat(balance.cost(c.remaining, partsForCost))}'
-              : null,
-          onSend: () => actions.sendGroup(group),
-          onReset: () => actions.resetGroup(group),
-          onRemove: () => actions.removeGroup(group),
-          onOpen: () => Navigator.push(
-            context,
-            MaterialPageRoute<void>(
-              builder: (_) => GroupDetailPage(groupId: group.id),
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 24),
+      sliver: SliverList.builder(
+        itemCount: state.groups.length,
+        itemBuilder: (context, index) {
+          final group = state.groups[index];
+          final c = group.counters;
+          return GroupCard(
+            key: ValueKey(group.id),
+            group: group,
+            isActive: state.activeGroupId == group.id,
+            actionsEnabled: !state.isImporting,
+            queuePosition: state.queuePosition(group.id),
+            selectionMode: state.hasSelection,
+            selected: state.isSelected(group.id),
+            onToggleSelected: () => ref
+                .read(groupsControllerProvider(_source).notifier)
+                .toggleSelected(group.id),
+            onDequeue: () => actions.dequeue(group),
+            onRename: () => actions.rename(group),
+            costLabel: c.remaining > 0
+                ? '≈ ${formatManat(balance.cost(c.remaining, partsForCost))}'
+                : null,
+            onSend: () => actions.sendGroup(group),
+            onReset: () => actions.resetGroup(group),
+            onRemove: () => actions.removeGroup(group),
+            onOpen: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    GroupDetailPage(groupId: group.id, source: _source),
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -223,29 +246,33 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
   }
 
   Future<void> _importExcel() async {
-    final state = ref.read(groupsControllerProvider);
+    final s = S.of(context);
+    final state = ref.read(groupsControllerProvider(_source));
     var replace = false;
 
     if (!state.isEmpty) {
       final choice = await showDialog<_ImportMode>(
         context: context,
         builder: (ctx) => SimpleDialog(
-          title: const Text('Уже есть группы'),
+          title: Text(s.groupsExist),
           children: [
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, _ImportMode.append),
-              child: const ListTile(
-                leading: Icon(Icons.playlist_add),
-                title: Text('Добавить к существующим'),
-                subtitle: Text('Новые группы продолжат нумерацию'),
+              child: ListTile(
+                leading: const Icon(Icons.playlist_add),
+                title: Text(s.importAppend),
+                subtitle: Text(s.importAppendHint),
               ),
             ),
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, _ImportMode.replace),
-              child: const ListTile(
-                leading: Icon(Icons.refresh, color: Colors.red),
-                title: Text('Заменить'),
-                subtitle: Text('Текущие группы будут удалены'),
+              child: ListTile(
+                leading: Icon(
+                  Icons.refresh,
+                  color: Theme.of(ctx).colorScheme.error,
+                ),
+                title: Text(s.importReplace),
+                subtitle: Text(s.importReplaceHint),
               ),
             ),
           ],
@@ -267,18 +294,18 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
       bytes = await file.readAsBytes();
     } catch (error) {
       if (!mounted) return;
-      _snack('Не удалось прочитать файл: $error');
+      _snack('${s.fileReadError}: $error');
       return;
     }
     if (!mounted) return;
 
     try {
       final summary = await ref
-          .read(groupsControllerProvider.notifier)
+          .read(groupsControllerProvider(_source).notifier)
           .importFromBytes(bytes, replace: replace);
       _snack(summary.describe());
     } catch (error) {
-      _snack('Ошибка импорта: $error');
+      _snack(s.importError(error));
     }
   }
 
@@ -291,31 +318,31 @@ class _GroupsPageState extends ConsumerState<GroupsPage> {
         _errorDialogOpen = false;
         return;
       }
+      final s = S.of(context);
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.error_outline, color: Colors.red, size: 30),
-              SizedBox(width: 10),
-              Expanded(child: Text('Отправка остановлена')),
+              Icon(Icons.error_outline, color: Theme.of(ctx).colorScheme.error),
+              const SizedBox(width: 10),
+              Expanded(child: Text(s.sendStopped)),
             ],
           ),
           content: Text(message, style: const TextStyle(fontSize: 15)),
           actions: [
             FilledButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Понятно'),
+              child: Text(s.understood),
             ),
           ],
         ),
       );
       _errorDialogOpen = false;
-      if (mounted) ref.read(groupsControllerProvider.notifier).dismissError();
+      if (mounted) {
+        ref.read(groupsControllerProvider(_source).notifier).dismissError();
+      }
     });
   }
 
@@ -332,30 +359,31 @@ class _EmptyGroups extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.group_work_outlined, size: 64, color: Colors.grey),
+            Icon(Icons.group_work_outlined, size: 64, color: scheme.onSurfaceVariant),
             const SizedBox(height: 12),
-            const Text(
-              'Групп пока нет',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            Text(
+              s.groupsEmptyTitle,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Импортируйте Excel-файл с номерами: они будут автоматически '
-              'разбиты на группы по 100.',
+            Text(
+              s.groupsEmptyHint,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: onImport,
               icon: const Icon(Icons.upload_file),
-              label: const Text('Импорт из Excel'),
+              label: Text(s.importExcel),
             ),
           ],
         ),

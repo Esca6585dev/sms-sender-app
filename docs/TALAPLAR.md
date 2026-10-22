@@ -118,6 +118,24 @@ Ugradylan belgi backend-e hem `markNumberAsSent` bilen bellenýär (best-effort)
   beýleki telefonlar backend `GET /devices/` + `POST /devices/heartbeat/`
   arkaly — şertnama `docs/DEVICES_API.md`-de (backend tarapynda ýazylmaly).
 
+## 4c. Üç dil, serwer toparlary, SMS-limit pauzasy (2026-10-22)
+
+- **Diller** (`lib/l10n/`): `S` (iňlis, baza), `StringsRu`, `StringsTk`; ähli UI
+  tekstleri `S.of(context)` / `S.current` arkaly. Menýuda "Dil" saýlawy
+  (`LanguageController`, ýatda saklanýar); dil çalşanda tutuş UI täzeden gurulýar.
+- **Рассылка sahypasy** (`lib/features/send/send_page.dart`): serwerdäki ähli
+  belgiler (`/contacts/all/`) ýüklenip 100-den toparlara bölünýär
+  (`GroupSource.server`, aýratyn kontroller we ýatda saklama). Tertip: serwerdäki
+  ýaly / ady / belgisi / ilki ugradylmadyklar. Serwerdäki "ugradylan" belligi
+  toparlaryň statusyna geçýär, topar atlary täzeden ýüklände saklanýar.
+  "Hemmesine ugrat" toparlary nobata goýup, bir-biriniň yzyndan ugradýar.
+- **SMS limiti:** telefon ugratmakdan ýüz dönderse kontroller belgini yzyna
+  goýup 2 → 5 → 15 → 30 min garaşýar (`limitWaitScheduleProvider`), bildirişde
+  we panelde "limit · HH:MM-da dowam" görkezýär, "Häzir dowam et" / "Sakla"
+  düwmeleri; soň şol belgiden dowam edýär. 6 gezek yzygider ýüz dönderse
+  belgi ýalňyş diýlip bellenýär we ugratma saklanýar.
+- **Группы sahypasy** doly scroll edilýär (CustomScrollView).
+
 ## 5. Testler
 
 ```

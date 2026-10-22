@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sms_sender_app/core/sms/sms_sender.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Source of incoming SMS (the operator answers the balance request by SMS).
 abstract class IncomingSmsSource {
@@ -198,14 +199,14 @@ class BalanceController extends Notifier<BalanceState> {
             multipart: false,
           );
       if (!result.success) {
-        _finish(error: result.error ?? 'Запрос не отправлен');
+        _finish(error: result.error ?? S.current.requestNotSent);
         return false;
       }
       final value = await completer.future.timeout(replyTimeout);
       _finish(balance: value);
       return true;
     } on TimeoutException {
-      _finish(error: 'Ответ от оператора не получен');
+      _finish(error: S.current.noOperatorReply);
       return false;
     } catch (error) {
       _finish(error: error.toString());

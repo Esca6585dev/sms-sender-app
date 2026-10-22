@@ -1,46 +1,60 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
+import 'package:sms_sender_app/features/groups/domain/group_source.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
 import 'package:sms_sender_app/features/groups/presentation/group_actions.dart';
 import 'package:sms_sender_app/features/groups/presentation/widgets/status_chip.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Full list of the numbers of one group with per-number status.
 class GroupDetailPage extends ConsumerWidget {
-  const GroupDetailPage({super.key, required this.groupId});
+  const GroupDetailPage({
+    super.key,
+    required this.groupId,
+    this.source = GroupSource.excel,
+  });
 
   final String groupId;
+  final GroupSource source;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final group = ref.watch(
-      groupsControllerProvider.select((s) => s.groupById(groupId)),
-    );
-    final isActive = ref.watch(
-      groupsControllerProvider.select((s) => s.activeGroupId == groupId),
-    );
-    final isBusy = ref.watch(groupsControllerProvider.select((s) => s.isBusy));
+    final s = S.of(context);
+    final provider = groupsControllerProvider(source);
+    final group = ref.watch(provider.select((st) => st.groupById(groupId)));
+    final isActive =
+        ref.watch(provider.select((st) => st.activeGroupId == groupId));
+    final isImporting = ref.watch(provider.select((st) => st.isImporting));
 
     if (group == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Группа')),
-        body: const Center(child: Text('Группа удалена')),
+        appBar: AppBar(title: Text(s.groupDeletedTitle)),
+        body: Center(child: Text(s.groupDeletedBody)),
       );
     }
 
     final c = group.counters;
     final status = group.statusFor(isActive: isActive);
-    final actions = GroupActions(context, ref);
+    final t = AppStyleTokens.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final actions = GroupActions(context, ref, source: source);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(group.title),
         actions: [
           IconButton(
-            tooltip: 'Сбросить статусы',
+            tooltip: s.rename,
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: () => actions.rename(group),
+          ),
+          IconButton(
+            tooltip: s.resetStatuses,
             icon: const Icon(Icons.restart_alt),
-            onPressed: isBusy || (c.sent == 0 && c.failed == 0)
+            onPressed: isImporting || isActive || (c.sent == 0 && c.failed == 0)
                 ? null
                 : () => actions.resetGroup(group),
           ),
@@ -51,10 +65,6 @@ class GroupDetailPage extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Column(
@@ -64,7 +74,7 @@ class GroupDetailPage extends ConsumerWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            '${group.rangeLabel} · ${c.total} номеров',
+                            '${group.rangeLabel} · ${s.numbersCount(c.total)}',
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -80,21 +90,19 @@ class GroupDetailPage extends ConsumerWidget {
                       child: LinearProgressIndicator(
                         value: c.progress,
                         minHeight: 8,
-                        color: status.color,
-                        backgroundColor: Colors.grey.shade200,
+                        color: status.colorOf(t),
+                        backgroundColor: scheme.surfaceContainerHighest,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Отправлено ${c.sent} / ${c.total}'),
-                        Text('Осталось ${c.remaining}'),
+                        Text(s.sentOf(c.sent, c.total)),
+                        Text('${s.remainingLabel} ${c.remaining}'),
                         Text(
-                          'Ошибок ${c.failed}',
-                          style: TextStyle(
-                            color: c.failed > 0 ? Colors.red : null,
-                          ),
+                          '${s.failedLabel} ${c.failed}',
+                          style: TextStyle(color: c.failed > 0 ? t.danger : null),
                         ),
                       ],
                     ),
@@ -111,9 +119,6 @@ class GroupDetailPage extends ConsumerWidget {
                 final recipient = group.recipients[index];
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 2),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
                   child: ListTile(
                     dense: true,
                     visualDensity: VisualDensity.compact,
@@ -127,17 +132,14 @@ class GroupDetailPage extends ConsumerWidget {
                             recipient.error!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.red,
-                              fontSize: 12,
-                            ),
+                            style: TextStyle(color: t.danger, fontSize: 12),
                           )
                         : recipient.name.isNotEmpty
                             ? Text(recipient.name)
                             : null,
                     trailing: Text(
                       '№ ${group.startNumber + index}',
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                     ),
                   ),
                 );
@@ -150,14 +152,14 @@ class GroupDetailPage extends ConsumerWidget {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
           child: FilledButton.icon(
-            onPressed: !isBusy && c.remaining > 0
+            onPressed: !isImporting && !isActive && c.remaining > 0
                 ? () => actions.sendGroup(group)
                 : null,
             icon: const Icon(Icons.send),
             label: Text(
               c.sent > 0 && c.remaining > 0
-                  ? 'Продолжить отправку (${c.remaining})'
-                  : 'Отправить группу (${c.remaining})',
+                  ? s.continueSendingN(c.remaining)
+                  : s.sendGroupN(c.remaining),
             ),
           ),
         ),
@@ -173,17 +175,18 @@ class _RecipientStatusIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppStyleTokens.of(context);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return switch (status) {
       RecipientStatus.pending =>
-        const Icon(Icons.radio_button_unchecked, color: Colors.grey),
+        Icon(Icons.radio_button_unchecked, color: muted),
       RecipientStatus.sending => const SizedBox(
           width: 22,
           height: 22,
           child: CircularProgressIndicator(strokeWidth: 2),
         ),
-      RecipientStatus.sent =>
-        const Icon(Icons.check_circle, color: Colors.green),
-      RecipientStatus.failed => const Icon(Icons.error, color: Colors.red),
+      RecipientStatus.sent => Icon(Icons.check_circle, color: t.success),
+      RecipientStatus.failed => Icon(Icons.error, color: t.danger),
     };
   }
 }

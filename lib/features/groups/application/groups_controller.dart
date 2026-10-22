@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,47 +7,58 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sms_sender_app/core/device/device_bridge.dart';
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
 import 'package:sms_sender_app/core/sms/sms_sender.dart';
+import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/data/sent_numbers_sync.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
+import 'package:sms_sender_app/features/groups/domain/group_source.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
-/// Business logic of the groups feature: import, batching, sequential
-/// sending with live counters, stop, reset and persistence.
+/// Business logic of one set of groups (Excel or server): import, batching,
+/// a send queue with live counters, SMS-limit pauses, stop, reset and
+/// persistence.
 ///
 /// The UI never mutates groups directly; it calls methods here and watches
 /// [GroupsState].
 class GroupsController extends Notifier<GroupsState> {
+  GroupsController(this.source);
+
+  final GroupSource source;
+
   late GroupsRepository _repository;
   late SmsSender _sender;
   late ExcelParser _parser;
   late GroupBatcher _batcher;
   SentNumbersSync? _sync;
   late DeviceBridge _bridge;
+  late List<Duration> _limitWaits;
   late Future<void> _ready;
 
   Timer? _persistTimer;
   StreamSubscription<void>? _stopSubscription;
   bool _stopRequested = false;
+  bool _resumeRequested = false;
   bool _disposed = false;
+  int _limitStrikes = 0;
 
   static const Duration _persistDebounce = Duration(milliseconds: 400);
-  static const String _serviceTitle = 'Рассылка SMS';
 
   @override
   GroupsState build() {
-    _repository = ref.watch(groupsRepositoryProvider);
+    _repository = ref.watch(groupsRepositoryProvider(source));
     _sender = ref.watch(smsSenderProvider);
     _parser = ref.watch(excelParserProvider);
     _batcher = ref.watch(groupBatcherProvider);
     _sync = ref.watch(sentNumbersSyncProvider);
     _bridge = ref.watch(deviceBridgeProvider);
+    _limitWaits = ref.watch(limitWaitScheduleProvider);
     _disposed = false;
 
     // "Stop" on the foreground-service notification.
@@ -78,60 +90,111 @@ class GroupsController extends Notifier<GroupsState> {
     bool replace = false,
   }) async {
     await _ready;
-    if (state.isSending) {
-      throw StateError('Импорт недоступен во время отправки');
-    }
-    if (state.isImporting) {
-      throw StateError('Импорт уже выполняется');
-    }
-
+    _checkCanImport();
     _emit(state.copyWith(isImporting: true));
     try {
       final parsed = await _parser(bytes);
-      final existing = replace ? const <SmsGroup>[] : state.groups;
-
-      final known = <String>{
-        for (final g in existing)
-          for (final r in g.recipients) r.phone,
-      };
-      final fresh = <SmsRecipient>[];
-      var duplicates = parsed.duplicateCount;
-      for (final r in parsed.recipients) {
-        if (known.add(r.phone)) {
-          fresh.add(r);
-        } else {
-          duplicates++;
-        }
-      }
-
-      final created = _batcher.split(
-        fresh,
-        firstIndex: existing.isEmpty ? 1 : existing.last.index + 1,
-        firstNumber: existing.isEmpty ? 1 : existing.last.endNumber + 1,
-      );
-
-      final summary = ImportSummary(
-        imported: fresh.length,
-        groupsCreated: created.length,
+      return await _import(
+        parsed.recipients,
+        replace: replace,
         invalid: parsed.invalidCount,
-        duplicates: duplicates,
-        empty: parsed.emptyCount,
+        duplicates: parsed.duplicateCount,
         totalRows: parsed.totalRows,
       );
-
-      _emit(
-        state.copyWith(
-          groups: [...existing, ...created],
-          isImporting: false,
-          lastImport: summary,
-        ),
-      );
-      await _persistNow();
-      return summary;
     } catch (_) {
       _emit(state.copyWith(isImporting: false));
       rethrow;
     }
+  }
+
+  /// Splits already-parsed numbers (e.g. the backend contact list) into
+  /// groups. With [keepNames] custom group names survive a [replace] when the
+  /// group index is the same.
+  Future<ImportSummary> importRecipients(
+    List<SmsRecipient> recipients, {
+    bool replace = false,
+    bool keepNames = false,
+  }) async {
+    await _ready;
+    _checkCanImport();
+    _emit(state.copyWith(isImporting: true));
+    try {
+      return await _import(
+        recipients,
+        replace: replace,
+        keepNames: keepNames,
+        totalRows: recipients.length,
+      );
+    } catch (_) {
+      _emit(state.copyWith(isImporting: false));
+      rethrow;
+    }
+  }
+
+  void _checkCanImport() {
+    if (state.isSending) throw StateError('import while sending');
+    if (state.isImporting) throw StateError('import already running');
+  }
+
+  Future<ImportSummary> _import(
+    List<SmsRecipient> recipients, {
+    required bool replace,
+    bool keepNames = false,
+    int invalid = 0,
+    int duplicates = 0,
+    int totalRows = 0,
+  }) async {
+    final existing = replace ? const <SmsGroup>[] : state.groups;
+    final oldNames = {
+      for (final g in state.groups)
+        if (g.name != null) g.index: g.name!,
+    };
+
+    final known = <String>{
+      for (final g in existing)
+        for (final r in g.recipients) r.phone,
+    };
+    final fresh = <SmsRecipient>[];
+    var skipped = duplicates;
+    for (final r in recipients) {
+      if (known.add(r.phone)) {
+        fresh.add(r);
+      } else {
+        skipped++;
+      }
+    }
+
+    var created = _batcher.split(
+      fresh,
+      firstIndex: existing.isEmpty ? 1 : existing.last.index + 1,
+      firstNumber: existing.isEmpty ? 1 : existing.last.endNumber + 1,
+    );
+    if (keepNames && replace) {
+      created = [
+        for (final g in created)
+          oldNames.containsKey(g.index) ? g.rename(oldNames[g.index]) : g,
+      ];
+    }
+
+    final summary = ImportSummary(
+      imported: fresh.length,
+      groupsCreated: created.length,
+      invalid: invalid,
+      duplicates: skipped,
+      empty: 0,
+      totalRows: totalRows,
+    );
+
+    _emit(
+      state.copyWith(
+        groups: [...existing, ...created],
+        isImporting: false,
+        lastImport: summary,
+        selectedIds: const {},
+      ),
+    );
+    await _persistNow();
+    return summary;
   }
 
   // ------------------------------------------------------------------ send
@@ -217,6 +280,9 @@ class GroupsController extends Notifier<GroupsState> {
     _emit(state.copyWith(stopRequested: true, queue: const []));
   }
 
+  /// Ends an SMS-limit pause early and retries right away.
+  void resumeNow() => _resumeRequested = true;
+
   // ------------------------------------------------------------- selection
 
   void toggleSelected(String groupId) {
@@ -236,7 +302,7 @@ class GroupsController extends Notifier<GroupsState> {
 
   void clearSelection() => _emit(state.copyWith(selectedIds: const {}));
 
-  /// Custom group name; empty restores "Группа A".
+  /// Custom group name; empty restores the default letter name.
   Future<void> renameGroup(String groupId, String? name) async {
     await _ready;
     _replaceGroup(groupId, (g) => g.rename(name));
@@ -246,8 +312,9 @@ class GroupsController extends Notifier<GroupsState> {
   Future<void> _runQueue(String message, Duration delay) async {
     final info = SmsMessageInfo.analyze(message);
     _stopRequested = false;
+    _limitStrikes = 0;
     _emit(state.copyWith(stopRequested: false, errorMessage: null));
-    unawaited(_bridge.startSending(_serviceTitle, 'Подготовка…'));
+    unawaited(_bridge.startSending(S.current.serviceTitle, S.current.preparing));
     unawaited(_bridge.keepScreenOn(true));
 
     try {
@@ -283,6 +350,7 @@ class GroupsController extends Notifier<GroupsState> {
           activeGroupId: null,
           stopRequested: false,
           queue: const [],
+          pausedUntil: null,
         ),
       );
       unawaited(_bridge.stopSending());
@@ -322,9 +390,25 @@ class GroupsController extends Notifier<GroupsState> {
           multipart: multipart,
         );
       } on SmsSendException catch (error) {
-        processed.add(_logEntry(recipient, sent: false, error: error.message));
-        _abort(groupId, i, error.message);
-        return;
+        // The phone refused to send: usually the SMS limit. Put the number
+        // back, wait, then retry it; give up only after the whole schedule.
+        if (_limitStrikes >= _limitWaits.length + 2) {
+          processed.add(_logEntry(recipient, sent: false, error: error.message));
+          _abort(groupId, i, error.message);
+          return;
+        }
+        final wait =
+            _limitWaits[math.min(_limitStrikes, _limitWaits.length - 1)];
+        _limitStrikes++;
+        _patch(
+          groupId,
+          i,
+          (r) => r.copyWith(status: RecipientStatus.pending, error: null),
+        );
+        await _pause(wait);
+        if (_stopRequested || _disposed) return;
+        i--; // retry the same number
+        continue;
       } catch (error) {
         processed.add(_logEntry(recipient, sent: false, error: '$error'));
         _abort(groupId, i, error.toString());
@@ -332,6 +416,7 @@ class GroupsController extends Notifier<GroupsState> {
       }
 
       if (result.success) {
+        _limitStrikes = 0;
         final sentAt = DateTime.now();
         _patch(
           groupId,
@@ -352,13 +437,13 @@ class GroupsController extends Notifier<GroupsState> {
         if (updated != null) {
           unawaited(
             _bridge.updateSending(
-              _serviceTitle,
+              S.current.serviceTitle,
               '${updated.title}: ${updated.counters.sent} / ${updated.total}',
             ),
           );
         }
       } else {
-        final error = result.error ?? 'Не отправлено';
+        final error = result.error ?? S.current.notSent;
         _patch(
           groupId,
           i,
@@ -372,6 +457,30 @@ class GroupsController extends Notifier<GroupsState> {
         await Future<void>.delayed(delay);
       }
     }
+  }
+
+  /// Waits for [wait] (or until stop / resume), showing the time in the UI
+  /// and the notification.
+  Future<void> _pause(Duration wait) async {
+    final until = DateTime.now().add(wait);
+    _resumeRequested = false;
+    _emit(state.copyWith(pausedUntil: until));
+    unawaited(
+      _bridge.updateSending(
+        S.current.serviceTitle,
+        S.current.pausedUntil(DateFormatting.time(until)),
+      ),
+    );
+    while (!_stopRequested && !_disposed && !_resumeRequested) {
+      final remaining = until.difference(DateTime.now());
+      if (remaining <= Duration.zero) break;
+      await Future<void>.delayed(
+        remaining < const Duration(seconds: 1)
+            ? remaining
+            : const Duration(seconds: 1),
+      );
+    }
+    _emit(state.copyWith(pausedUntil: null));
   }
 
   static CampaignRecipient _logEntry(
@@ -400,7 +509,9 @@ class GroupsController extends Notifier<GroupsState> {
       ref.read(campaignLogProvider.notifier).record(
             SmsCampaign.fromRun(
               message: message,
-              source: CampaignSource.group,
+              source: source == GroupSource.server
+                  ? CampaignSource.serverGroup
+                  : CampaignSource.group,
               sourceLabel: '${group.title} (${group.rangeLabel})',
               startedAt: startedAt,
               recipients: processed,
@@ -416,12 +527,7 @@ class GroupsController extends Notifier<GroupsState> {
       (r) => r.copyWith(status: RecipientStatus.failed, error: details),
     );
     _stopRequested = true;
-    _emit(
-      state.copyWith(
-        errorMessage: 'Достигнут лимит отправки SMS или оператор временно '
-            'запретил отправку.\n\nПопробуйте позже.\n\n$details',
-      ),
-    );
+    _emit(state.copyWith(errorMessage: S.current.limitError(details)));
   }
 
   // ----------------------------------------------------------------- reset
@@ -531,5 +637,8 @@ class GroupsController extends Notifier<GroupsState> {
   }
 }
 
+/// One controller per [GroupSource]: Excel groups and server groups.
 final groupsControllerProvider =
-    NotifierProvider<GroupsController, GroupsState>(GroupsController.new);
+    NotifierProvider.family<GroupsController, GroupsState, GroupSource>(
+  GroupsController.new,
+);

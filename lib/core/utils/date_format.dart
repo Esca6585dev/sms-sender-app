@@ -1,16 +1,10 @@
+import 'package:sms_sender_app/l10n/strings.dart';
+
 /// Small date helpers so the app does not need the `intl` package.
 class DateFormatting {
   const DateFormatting._();
 
-  static const List<String> weekdayShort = [
-    'Пн',
-    'Вт',
-    'Ср',
-    'Чт',
-    'Пт',
-    'Сб',
-    'Вс',
-  ];
+  static List<String> get weekdayShort => S.current.weekdaysShort;
 
   static String two(int value) => value.toString().padLeft(2, '0');
 
@@ -23,23 +17,19 @@ class DateFormatting {
   /// `21.10.2026 14:05`
   static String dateTime(DateTime d) => '${date(d)} ${time(d)}';
 
-  /// `Сегодня`, `Вчера` or the date.
+  /// Today / yesterday (localised) or the date.
   static String relativeDate(DateTime d, {DateTime? now}) {
     final today = _dayOf(now ?? DateTime.now());
     final day = _dayOf(d);
     final diff = today.difference(day).inDays;
-    if (diff == 0) return 'Сегодня';
-    if (diff == 1) return 'Вчера';
+    if (diff == 0) return S.current.today;
+    if (diff == 1) return S.current.yesterday;
     return date(d);
   }
 
-  /// `2 мин 10 сек`
-  static String duration(Duration value) {
-    final minutes = value.inMinutes;
-    final seconds = value.inSeconds % 60;
-    if (minutes == 0) return '$seconds сек';
-    return '$minutes мин $seconds сек';
-  }
+  /// `2 min 10 s` (localised units).
+  static String duration(Duration value) =>
+      S.current.minutesSeconds(value.inMinutes, value.inSeconds % 60);
 
   static DateTime _dayOf(DateTime d) => DateTime(d.year, d.month, d.day);
 }

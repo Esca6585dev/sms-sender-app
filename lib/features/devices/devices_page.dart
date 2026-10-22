@@ -6,6 +6,7 @@ import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/devices/devices_controller.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// This phone (SIM choice, balance, SMS price) and the other phones that
 /// report to the same backend.
@@ -29,6 +30,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final devices = ref.watch(devicesProvider);
     final balance = ref.watch(balanceProvider);
     final stats = ref.watch(campaignLogProvider).stats();
@@ -37,10 +39,10 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Устройства'),
+        title: Text(s.devicesTitle),
         actions: [
           IconButton(
-            tooltip: 'Обновить',
+            tooltip: s.refresh,
             icon: const Icon(Icons.refresh),
             onPressed: () {
               ref.read(devicesProvider.notifier).refreshLocal();
@@ -52,7 +54,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         children: [
-          _Section('Это устройство'),
+          _Section(s.thisDevice),
           Card(
             child: Column(
               children: [
@@ -63,8 +65,10 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   subtitle: Text(
-                    'ID ${devices.deviceId.isEmpty ? '—' : devices.deviceId} · '
-                    'сегодня отправлено: ${stats.sentToday}',
+                    s.deviceLine(
+                      devices.deviceId.isEmpty ? s.none : devices.deviceId,
+                      stats.sentToday,
+                    ),
                   ),
                 ),
                 const Divider(height: 1),
@@ -73,7 +77,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'SIM для отправки',
+                      s.simForSending,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -83,16 +87,16 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                   ),
                 ),
                 _SimTile(
-                  title: 'Системная по умолчанию',
-                  subtitle: 'Как выбрано в настройках телефона',
+                  title: s.simSystemDefault,
+                  subtitle: s.simSystemDefaultHint,
                   selected: balance.selectedSim == -1,
                   onTap: () => ref.read(balanceProvider.notifier).selectSim(-1),
                 ),
                 for (final sim in devices.sims)
                   _SimTile(
                     title: sim.label,
-                    subtitle: 'Слот ${sim.slot + 1}'
-                        '${sim.isDefaultSms ? ' · SMS по умолчанию' : ''}',
+                    subtitle: '${s.simSlot(sim.slot + 1)}'
+                        '${sim.isDefaultSms ? ' · ${s.simDefaultSms}' : ''}',
                     selected: balance.selectedSim == sim.subscriptionId,
                     onTap: () => ref
                         .read(balanceProvider.notifier)
@@ -102,7 +106,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     child: Text(
-                      'SIM-карты не прочитаны: нужно разрешение «Телефон».',
+                      s.simNotRead,
                       style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                     ),
                   ),
@@ -111,13 +115,13 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
             ),
           ),
           const SizedBox(height: 14),
-          _Section('Баланс'),
+          _Section(s.balance),
           _BalanceCard(balance: balance),
           const SizedBox(height: 14),
-          _Section('Стоимость и запрос баланса'),
+          _Section(s.pricingTitle),
           _PricingCard(settings: balance.settings),
           const SizedBox(height: 14),
-          _Section('Другие устройства'),
+          _Section(s.otherDevices),
           _OthersCard(state: devices),
         ],
       ),
@@ -183,6 +187,7 @@ class _BalanceCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = S.of(context);
     final scheme = Theme.of(context).colorScheme;
     final t = AppStyleTokens.of(context);
     final value = balance.balance;
@@ -198,7 +203,7 @@ class _BalanceCard extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  value == null ? '—' : formatManat(value),
+                  value == null ? s.none : formatManat(value),
                   style: TextStyle(
                     fontSize: 30,
                     fontWeight: FontWeight.w800,
@@ -211,7 +216,7 @@ class _BalanceCard extends ConsumerWidget {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 5),
                     child: Text(
-                      '≈ $affordable SMS',
+                      s.approxSms(affordable),
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -224,9 +229,8 @@ class _BalanceCard extends ConsumerWidget {
             const SizedBox(height: 4),
             Text(
               balance.updatedAt == null
-                  ? 'Баланс ещё не проверялся'
-                  : 'Обновлено ${DateFormatting.dateTime(balance.updatedAt!)}'
-                      ' · после отправок уменьшается автоматически',
+                  ? s.balanceNotChecked
+                  : s.balanceUpdated(DateFormatting.dateTime(balance.updatedAt!)),
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
             if (balance.error != null)
@@ -241,7 +245,7 @@ class _BalanceCard extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Ответ оператора: ${balance.lastReply}',
+                  s.operatorReply(balance.lastReply!),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
@@ -264,15 +268,15 @@ class _BalanceCard extends ConsumerWidget {
                         : const Icon(Icons.sms_outlined, size: 18),
                     label: Text(
                       balance.isChecking
-                          ? 'Ждём ответ…'
-                          : 'Проверить (SMS на ${balance.settings.requestNumber})',
+                          ? s.waitingReply
+                          : s.checkViaSms(balance.settings.requestNumber),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton(
                   onPressed: () => _enterManually(context, ref),
-                  child: const Text('Вручную'),
+                  child: Text(s.manual),
                 ),
               ],
             ),
@@ -283,30 +287,31 @@ class _BalanceCard extends ConsumerWidget {
   }
 
   Future<void> _enterManually(BuildContext context, WidgetRef ref) async {
+    final s = S.of(context);
     final controller = TextEditingController(
       text: balance.balance?.toStringAsFixed(2) ?? '',
     );
     final value = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Баланс, TMT'),
+        title: Text(s.balanceTmt),
         content: TextField(
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(hintText: 'Например 12.50'),
+          decoration: InputDecoration(hintText: s.forExample),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Отмена'),
+            child: Text(s.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(
               ctx,
               double.tryParse(controller.text.trim().replaceAll(',', '.')),
             ),
-            child: const Text('Сохранить'),
+            child: Text(s.save),
           ),
         ],
       ),
@@ -351,6 +356,7 @@ class _PricingCardState extends ConsumerState<_PricingCard> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -359,9 +365,10 @@ class _PricingCardState extends ConsumerState<_PricingCard> {
             TextField(
               controller: _price,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Цена одной части SMS, TMT',
-                helperText: '1 теңңе = 0.01 TMT; длинное SMS = несколько частей',
+              decoration: InputDecoration(
+                labelText: s.pricePerPart,
+                helperText: s.priceHelper,
+                helperMaxLines: 2,
               ),
             ),
             const SizedBox(height: 10),
@@ -371,16 +378,14 @@ class _PricingCardState extends ConsumerState<_PricingCard> {
                   child: TextField(
                     controller: _number,
                     keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Номер запроса баланса',
-                    ),
+                    decoration: InputDecoration(labelText: s.requestNumber),
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: TextField(
                     controller: _text,
-                    decoration: const InputDecoration(labelText: 'Текст запроса'),
+                    decoration: InputDecoration(labelText: s.requestText),
                   ),
                 ),
               ],
@@ -390,7 +395,7 @@ class _PricingCardState extends ConsumerState<_PricingCard> {
               alignment: Alignment.centerRight,
               child: FilledButton.tonal(
                 onPressed: _save,
-                child: const Text('Сохранить'),
+                child: Text(s.save),
               ),
             ),
           ],
@@ -409,7 +414,7 @@ class _PricingCardState extends ConsumerState<_PricingCard> {
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Сохранено')),
+      SnackBar(content: Text(S.of(context).saved)),
     );
   }
 }
@@ -421,6 +426,7 @@ class _OthersCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = S.of(context);
     final scheme = Theme.of(context).colorScheme;
     final t = AppStyleTokens.of(context);
 
@@ -434,9 +440,7 @@ class _OthersCard extends ConsumerWidget {
       body = Padding(
         padding: const EdgeInsets.all(14),
         child: Text(
-          'Сервер пока не поддерживает список устройств. Нужны эндпоинты '
-          'GET /devices/ и POST /devices/heartbeat/ (описание в docs/DEVICES_API.md). '
-          'После этого здесь появятся другие телефоны с их балансом и статистикой.',
+          s.otherDevicesUnsupported,
           style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
         ),
       );
@@ -450,7 +454,7 @@ class _OthersCard extends ConsumerWidget {
             ),
             TextButton(
               onPressed: () => ref.read(devicesProvider.notifier).refreshRemote(),
-              child: const Text('Повторить'),
+              child: Text(s.retry),
             ),
           ],
         ),
@@ -459,7 +463,7 @@ class _OthersCard extends ConsumerWidget {
       body = Padding(
         padding: const EdgeInsets.all(14),
         child: Text(
-          'Других устройств пока нет',
+          s.noOtherDevices,
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
       );
@@ -471,12 +475,12 @@ class _OthersCard extends ConsumerWidget {
               leading: Icon(Icons.phone_android, color: t.accent),
               title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(
-                '${d.number.isEmpty ? 'номер неизвестен' : d.number} · '
-                'сегодня: ${d.sentToday} SMS'
+                '${d.number.isEmpty ? s.numberUnknown : d.number} · '
+                '${s.todaySms(d.sentToday)}'
                 '${d.lastSeen != null ? ' · ${DateFormatting.dateTime(d.lastSeen!)}' : ''}',
               ),
               trailing: Text(
-                d.balance == null ? '—' : formatManat(d.balance!),
+                d.balance == null ? s.none : formatManat(d.balance!),
                 style: TextStyle(fontWeight: FontWeight.w800, color: t.accent),
               ),
             ),

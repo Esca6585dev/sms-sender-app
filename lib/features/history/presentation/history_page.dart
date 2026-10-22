@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
 import 'package:sms_sender_app/features/history/presentation/campaign_detail_page.dart';
 import 'package:sms_sender_app/features/history/presentation/server_messages_page.dart';
 import 'package:sms_sender_app/features/history/presentation/widgets/campaign_card.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 enum _HistoryAction { serverTexts, clear }
 
@@ -17,33 +19,37 @@ class HistoryPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = S.of(context);
     final state = ref.watch(campaignLogProvider);
     final rows = _buildRows(state.campaigns);
 
     return Scaffold(
       appBar: AppBar(
         leading: const ShellMenuButton(),
-        title: const Text('История рассылок'),
+        title: Text(s.historyTitle),
         actions: [
           PopupMenuButton<_HistoryAction>(
-            tooltip: 'Ещё',
+            tooltip: s.more,
             onSelected: (action) => _onAction(context, ref, action),
             itemBuilder: (_) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: _HistoryAction.serverTexts,
                 child: ListTile(
                   dense: true,
-                  leading: Icon(Icons.cloud_outlined),
-                  title: Text('Тексты на сервере'),
+                  leading: const Icon(Icons.cloud_outlined),
+                  title: Text(s.drawerServerTexts),
                 ),
               ),
               PopupMenuItem(
                 value: _HistoryAction.clear,
                 enabled: !state.isEmpty,
-                child: const ListTile(
+                child: ListTile(
                   dense: true,
-                  leading: Icon(Icons.delete_sweep_outlined, color: Colors.red),
-                  title: Text('Очистить историю'),
+                  leading: Icon(
+                    Icons.delete_sweep_outlined,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  title: Text(s.clearHistory),
                 ),
               ),
             ],
@@ -113,6 +119,7 @@ class HistoryPage extends ConsumerWidget {
     WidgetRef ref,
     _HistoryAction action,
   ) async {
+    final s = S.of(context);
     switch (action) {
       case _HistoryAction.serverTexts:
         await Navigator.push(
@@ -123,19 +130,20 @@ class HistoryPage extends ConsumerWidget {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Очистить историю?'),
-            content: const Text(
-              'Все записи о рассылках будут удалены. Это действие нельзя отменить.',
-            ),
+            title: Text(s.clearHistoryTitle),
+            content: Text(s.clearHistoryBody),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Отмена'),
+                child: Text(s.cancel),
               ),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(ctx).colorScheme.error,
+                  foregroundColor: Colors.white,
+                ),
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Очистить'),
+                child: Text(s.clear),
               ),
             ],
           ),
@@ -163,17 +171,22 @@ class _HistoryTotals extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
-            _Total('Рассылок', '${stats.totalCampaigns}', scheme.primary),
-            _Total('Отправлено', '${stats.totalSent}', Colors.green),
-            _Total('Ошибок', '${stats.totalFailed}',
-                stats.totalFailed > 0 ? Colors.red : scheme.onSurfaceVariant),
-            _Total('Сегодня', '${stats.sentToday}', Colors.orange.shade800),
+            _Total(s.campaignsLabel, '${stats.totalCampaigns}', t.accent),
+            _Total(s.sentLabel, '${stats.totalSent}', t.success),
+            _Total(
+              s.errorsLabel,
+              '${stats.totalFailed}',
+              stats.totalFailed > 0 ? t.danger : scheme.onSurfaceVariant,
+            ),
+            _Total(s.todayLabel, '${stats.sentToday}', t.warning),
           ],
         ),
       ),
@@ -217,6 +230,7 @@ class _EmptyHistory extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
@@ -226,13 +240,13 @@ class _EmptyHistory extends StatelessWidget {
           children: [
             Icon(Icons.history, size: 64, color: scheme.onSurfaceVariant),
             const SizedBox(height: 12),
-            const Text(
-              'Рассылок пока не было',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            Text(
+              s.historyEmptyTitle,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Text(
-              'Здесь появится каждая отправка: когда, кому и сколько SMS ушло.',
+              s.historyEmptyHint,
               textAlign: TextAlign.center,
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),

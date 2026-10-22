@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sms_sender_app/core/device/device_bridge.dart';
 import 'package:sms_sender_app/features/balance/balance_controller.dart';
-import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/groups/domain/group_batcher.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
@@ -46,10 +45,10 @@ void main() {
         bridge: bridge,
         batchSize: 10,
       );
-      final notifier = container.read(groupsControllerProvider.notifier);
+      final notifier = container.read(excelGroups.notifier);
       parser.next = fakeRecipients(30);
       await notifier.importFromBytes(emptyBytes);
-      final groups = container.read(groupsControllerProvider).groups;
+      final groups = container.read(excelGroups).groups;
 
       final first = notifier.sendGroup(groups[0].id, message: 'Salam');
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -60,14 +59,14 @@ void main() {
       expect(queuedC, isTrue);
       expect(queuedB, isTrue);
       expect(again, isFalse); // already queued
-      var state = container.read(groupsControllerProvider);
+      var state = container.read(excelGroups);
       expect(state.isSending, isTrue);
       expect(state.queue, [groups[2].id, groups[1].id]);
       expect(state.queuePosition(groups[1].id), 2);
 
       await first;
 
-      state = container.read(groupsControllerProvider);
+      state = container.read(excelGroups);
       expect(state.isSending, isFalse);
       expect(state.queue, isEmpty);
       expect(state.totals.sent, 30);
@@ -87,22 +86,22 @@ void main() {
         parser: parser,
         batchSize: 10,
       );
-      final notifier = container.read(groupsControllerProvider.notifier);
+      final notifier = container.read(excelGroups.notifier);
       parser.next = fakeRecipients(30);
       await notifier.importFromBytes(emptyBytes);
-      final groups = container.read(groupsControllerProvider).groups;
+      final groups = container.read(excelGroups).groups;
 
       final run = notifier.sendAllPending(message: 'Salam');
       await Future<void>.delayed(const Duration(milliseconds: 8));
-      expect(container.read(groupsControllerProvider).queue.length, 2);
+      expect(container.read(excelGroups).queue.length, 2);
 
       notifier.dequeue(groups[1].id);
-      expect(container.read(groupsControllerProvider).queue, [groups[2].id]);
+      expect(container.read(excelGroups).queue, [groups[2].id]);
 
       notifier.stop();
       await run;
 
-      final state = container.read(groupsControllerProvider);
+      final state = container.read(excelGroups);
       expect(state.queue, isEmpty);
       expect(state.isSending, isFalse);
       expect(state.groups[1].counters.sent, 0);
@@ -119,30 +118,30 @@ void main() {
         parser: parser,
         batchSize: 10,
       );
-      final notifier = container.read(groupsControllerProvider.notifier);
+      final notifier = container.read(excelGroups.notifier);
       parser.next = fakeRecipients(30);
       await notifier.importFromBytes(emptyBytes);
-      final groups = container.read(groupsControllerProvider).groups;
+      final groups = container.read(excelGroups).groups;
 
       notifier.toggleSelected(groups[1].id);
       notifier.toggleSelected(groups[2].id);
       notifier.toggleSelected(groups[2].id);
-      expect(container.read(groupsControllerProvider).selectedIds, {groups[1].id});
+      expect(container.read(excelGroups).selectedIds, {groups[1].id});
 
       await notifier.sendSelected(message: 'Salam');
-      var state = container.read(groupsControllerProvider);
+      var state = container.read(excelGroups);
       expect(state.hasSelection, isFalse);
       expect(state.groups[1].counters.sent, 10);
       expect(state.groups[0].counters.sent, 0);
 
       notifier.selectAllPending();
-      state = container.read(groupsControllerProvider);
+      state = container.read(excelGroups);
       expect(state.selectedIds, {groups[0].id, groups[2].id});
 
       final bridge = NoopDeviceBridge();
       bridge.requestStop(); // no-op when idle
       notifier.clearSelection();
-      expect(container.read(groupsControllerProvider).hasSelection, isFalse);
+      expect(container.read(excelGroups).hasSelection, isFalse);
     });
 
     test('a notification "stop" request stops the running send', () async {
@@ -156,10 +155,10 @@ void main() {
         bridge: bridge,
         batchSize: 10,
       );
-      final notifier = container.read(groupsControllerProvider.notifier);
+      final notifier = container.read(excelGroups.notifier);
       parser.next = fakeRecipients(20);
       await notifier.importFromBytes(emptyBytes);
-      final group = container.read(groupsControllerProvider).groups.first;
+      final group = container.read(excelGroups).groups.first;
 
       final run = notifier.sendGroup(group.id, message: 'Salam');
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -167,7 +166,7 @@ void main() {
       await run;
 
       expect(sender.sent.length, lessThan(10));
-      expect(container.read(groupsControllerProvider).isSending, isFalse);
+      expect(container.read(excelGroups).isSending, isFalse);
     });
   });
 

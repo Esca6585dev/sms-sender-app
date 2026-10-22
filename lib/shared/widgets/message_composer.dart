@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
 /// Multi-line message input without a hard character limit. Shows a live
 /// counter with the encoding and the number of SMS parts the text needs.
@@ -9,19 +11,18 @@ class MessageComposer extends StatelessWidget {
     super.key,
     required this.controller,
     this.enabled = true,
-    this.labelText = 'Текст сообщения',
     this.minLines = 2,
     this.maxLines = 6,
   });
 
   final TextEditingController controller;
   final bool enabled;
-  final String labelText;
   final int minLines;
   final int maxLines;
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -33,14 +34,14 @@ class MessageComposer extends StatelessWidget {
           keyboardType: TextInputType.multiline,
           textInputAction: TextInputAction.newline,
           decoration: InputDecoration(
-            labelText: labelText,
-            border: InputBorder.none,
-            prefixIcon: const Icon(Icons.message),
+            labelText: s.messageText,
+            hintText: s.messageHint,
+            prefixIcon: const Icon(Icons.message_outlined),
             contentPadding: const EdgeInsets.all(12),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.only(right: 12, bottom: 6),
+          padding: const EdgeInsets.only(right: 4, top: 6),
           child: Align(
             alignment: Alignment.centerRight,
             child: ValueListenableBuilder<TextEditingValue>(
@@ -63,19 +64,23 @@ class SmsCounterLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final encoding = info.encoding == SmsEncoding.gsm7 ? 'GSM-7' : 'Unicode';
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final encoding =
+        info.encoding == SmsEncoding.gsm7 ? s.encodingGsm : s.encodingUnicode;
     final color = info.isEmpty
-        ? Colors.grey
+        ? scheme.onSurfaceVariant
         : info.isMultipart
-            ? Colors.orange.shade800
-            : Colors.grey.shade700;
+            ? t.warning
+            : scheme.onSurfaceVariant;
 
     return Tooltip(
       message: info.isMultipart
-          ? 'Длинное сообщение: будет отправлено как ${info.parts} части'
-          : 'Одно SMS, максимум ${info.singlePartLimit} символов ($encoding)',
+          ? s.tooltipMultipart(info.parts)
+          : s.tooltipSingle(info.singlePartLimit, encoding),
       child: Text(
-        '${info.length} / ${info.capacity} · SMS: ${info.parts} · $encoding',
+        s.counterLabel(info.length, info.capacity, info.parts, encoding),
         style: TextStyle(
           fontSize: 13,
           color: color,

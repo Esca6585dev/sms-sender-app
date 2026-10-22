@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import 'package:sms_sender_app/app/theme.dart';
+import 'package:sms_sender_app/core/utils/date_format.dart';
 import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
 import 'package:sms_sender_app/features/groups/application/groups_state.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
-/// Totals over all groups, balance line, send queue, delay selector and the
-/// global send/stop buttons.
+/// Totals over all groups, balance line, send queue, SMS-limit pause,
+/// delay selector and the global send/stop buttons.
 class GroupsSummaryPanel extends StatelessWidget {
   const GroupsSummaryPanel({
     super.key,
@@ -18,6 +20,7 @@ class GroupsSummaryPanel extends StatelessWidget {
     this.balance,
     this.onCheckBalance,
     this.onDequeue,
+    this.onResumeNow,
   });
 
   final GroupsState state;
@@ -28,24 +31,26 @@ class GroupsSummaryPanel extends StatelessWidget {
   final BalanceState? balance;
   final VoidCallback? onCheckBalance;
   final ValueChanged<String>? onDequeue;
+  final VoidCallback? onResumeNow;
 
-  static String delayLabel(int ms) => switch (ms) {
-        0 => 'Без задержки',
-        500 => '0.5 сек',
-        1000 => '1 сек',
-        2000 => '2 сек',
-        _ => '$ms мс',
+  static String delayLabel(S s, int ms) => switch (ms) {
+        0 => s.delayNone,
+        500 => s.delaySeconds('0.5'),
+        1000 => s.delaySeconds('1'),
+        2000 => s.delaySeconds('2'),
+        _ => '$ms ms',
       };
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final totals = state.totals;
     final pendingGroups = state.pendingGroupsCount;
     final active = state.activeGroup;
 
     return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         child: Column(
@@ -55,14 +60,14 @@ class GroupsSummaryPanel extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Групп: ${state.groups.length}',
+                  '${s.groupsCount}: ${state.groups.length}',
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
-                  'Номеров: ${totals.total}',
+                  '${s.numbersLabel}: ${totals.total}',
                   style: const TextStyle(fontSize: 14),
                 ),
               ],
@@ -73,29 +78,61 @@ class GroupsSummaryPanel extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: totals.progress,
                 minHeight: 10,
-                backgroundColor: Colors.grey.shade200,
+                backgroundColor: scheme.surfaceContainerHighest,
               ),
             ),
             const SizedBox(height: 6),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _Stat('Отправлено', totals.sent, Colors.green),
-                _Stat('Осталось', totals.remaining, Colors.orange.shade800),
-                _Stat('Ошибок', totals.failed, Colors.red),
+                _Stat(s.sentLabel, totals.sent, t.success),
+                _Stat(s.remainingLabel, totals.remaining, t.warning),
+                _Stat(s.failedLabel, totals.failed, t.danger),
               ],
             ),
             if (active != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Отправка: ${active.title} · '
-                  '${active.counters.sent} / ${active.counters.total}',
+                  s.sendingGroup(
+                    active.title,
+                    active.counters.sent,
+                    active.counters.total,
+                  ),
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: AppStyleTokens.of(context).accent,
+                    color: t.accent,
                   ),
+                ),
+              ),
+            if (state.pausedUntil != null)
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+                decoration: BoxDecoration(
+                  color: t.warning.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.hourglass_top, size: 18, color: t.warning),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        s.pausedUntil(DateFormatting.time(state.pausedUntil!)),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (onResumeNow != null)
+                      TextButton(
+                        onPressed: onResumeNow,
+                        child: Text(s.continueNow),
+                      ),
+                  ],
                 ),
               ),
             if (state.queue.isNotEmpty)
@@ -106,7 +143,7 @@ class GroupsSummaryPanel extends StatelessWidget {
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    const Text('Очередь:', style: TextStyle(fontSize: 12)),
+                    Text(s.queueLabel, style: const TextStyle(fontSize: 12)),
                     for (var i = 0; i < state.queue.length; i++)
                       InputChip(
                         visualDensity: VisualDensity.compact,
@@ -129,22 +166,22 @@ class GroupsSummaryPanel extends StatelessWidget {
                     Icon(
                       Icons.account_balance_wallet_outlined,
                       size: 16,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: scheme.onSurfaceVariant,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
                         balance!.balance == null
-                            ? 'Баланс неизвестен'
-                            : 'Баланс ${formatManat(balance!.balance!)}'
-                                '${balance!.affordableSms != null ? ' · ≈ ${balance!.affordableSms} SMS' : ''}',
+                            ? s.balanceUnknown
+                            : '${s.balanceLine(formatManat(balance!.balance!))}'
+                                '${balance!.affordableSms != null ? ' · ${s.approxSms(balance!.affordableSms!)}' : ''}',
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
                     if (onCheckBalance != null)
                       TextButton(
                         onPressed: balance!.isChecking ? null : onCheckBalance,
-                        child: Text(balance!.isChecking ? 'Ждём…' : 'Проверить'),
+                        child: Text(balance!.isChecking ? s.waiting : s.check),
                       ),
                   ],
                 ),
@@ -153,7 +190,7 @@ class GroupsSummaryPanel extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Text('Задержка:', style: TextStyle(fontSize: 13)),
+                Text(s.delayLabel, style: const TextStyle(fontSize: 13)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Wrap(
@@ -162,7 +199,7 @@ class GroupsSummaryPanel extends StatelessWidget {
                       for (final ms in SendDelayController.options)
                         ChoiceChip(
                           label: Text(
-                            delayLabel(ms),
+                            delayLabel(s, ms),
                             style: const TextStyle(fontSize: 12),
                           ),
                           selected: delayMs == ms,
@@ -187,18 +224,21 @@ class GroupsSummaryPanel extends StatelessWidget {
                     icon: Icon(state.isSending ? Icons.playlist_add : Icons.send),
                     label: Text(
                       state.isSending
-                          ? 'Все в очередь ($pendingGroups)'
-                          : 'Отправить все ($pendingGroups)',
+                          ? s.queueAll(pendingGroups)
+                          : s.sendAll(pendingGroups),
                     ),
                   ),
                 ),
                 if (state.isSending) ...[
                   const SizedBox(width: 8),
                   FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: t.danger,
+                      foregroundColor: Colors.white,
+                    ),
                     onPressed: state.stopRequested ? null : onStop,
                     icon: const Icon(Icons.stop_circle),
-                    label: Text(state.stopRequested ? 'Останавливаем…' : 'Стоп'),
+                    label: Text(state.stopRequested ? s.stopping : s.stop),
                   ),
                 ],
               ],
@@ -219,16 +259,17 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        Text(label, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
         Text(
           '$value',
           style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.bold,
-            color: value > 0 ? color : Colors.grey,
+            color: value > 0 ? color : scheme.onSurfaceVariant,
           ),
         ),
       ],

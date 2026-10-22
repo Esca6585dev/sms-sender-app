@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sms_sender_app/core/device/device_bridge.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 import 'package:sms_sender_app/shared/providers/app_providers.dart';
 
 /// A phone running this app and talking to the same backend.
@@ -164,8 +165,8 @@ class DevicesController extends Notifier<DevicesState> {
         isLoading: false,
         remoteSupported: status == 404 || status == 405 ? false : null,
         error: status == null
-            ? 'Нет связи с сервером'
-            : 'Сервер ответил $status',
+            ? S.current.noServerConnection
+            : S.current.serverStatus(status),
       );
     } catch (error) {
       if (_disposed) return;

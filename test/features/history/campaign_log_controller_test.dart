@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/data/groups_repository.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/data/campaign_repository.dart';
@@ -65,10 +64,10 @@ void main() {
         parser: parser,
         campaigns: repo,
       );
-      final groups = container.read(groupsControllerProvider.notifier);
+      final groups = container.read(excelGroups.notifier);
       parser.next = fakeRecipients(30);
       await groups.importFromBytes(emptyBytes);
-      final group = container.read(groupsControllerProvider).groups.first;
+      final group = container.read(excelGroups).groups.first;
       sender.failing.add(group.recipients[4].phone);
 
       await groups.sendGroup(group.id, message: 'Salam');

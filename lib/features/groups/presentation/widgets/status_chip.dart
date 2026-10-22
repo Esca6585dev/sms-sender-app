@@ -1,17 +1,28 @@
 import 'package:flutter/material.dart';
 
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/features/groups/domain/sms_group.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 
-/// Russian labels, colours and icons for [GroupStatus].
+/// Labels, colours and icons for [GroupStatus].
 extension GroupStatusPresentation on GroupStatus {
   String get label => switch (this) {
-        GroupStatus.pending => 'Ожидает',
-        GroupStatus.inProgress => 'В процессе',
-        GroupStatus.paused => 'Приостановлено',
-        GroupStatus.partial => 'С ошибками',
-        GroupStatus.sent => 'Отправлено',
+        GroupStatus.pending => S.current.statusPending,
+        GroupStatus.inProgress => S.current.statusInProgress,
+        GroupStatus.paused => S.current.statusPaused,
+        GroupStatus.partial => S.current.statusPartial,
+        GroupStatus.sent => S.current.statusSent,
       };
 
+  Color colorOf(AppStyleTokens t) => switch (this) {
+        GroupStatus.pending => Colors.blueGrey,
+        GroupStatus.inProgress => t.accent,
+        GroupStatus.paused => t.warning,
+        GroupStatus.partial => t.danger,
+        GroupStatus.sent => t.success,
+      };
+
+  /// Kept for callers without tokens; prefer [colorOf].
   Color get color => switch (this) {
         GroupStatus.pending => Colors.blueGrey,
         GroupStatus.inProgress => Colors.indigo,
@@ -37,7 +48,7 @@ class GroupStatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = status.color;
+    final color = status.colorOf(AppStyleTokens.of(context));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(

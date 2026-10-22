@@ -4,17 +4,28 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sms_sender_app/app/app_shell.dart' show ShellMenuButton;
-import 'package:sms_sender_app/core/device/device_bridge.dart';
+import 'package:sms_sender_app/app/theme.dart';
 import 'package:sms_sender_app/core/sms/sms_message_info.dart';
+import 'package:sms_sender_app/core/utils/phone_normalizer.dart';
 import 'package:sms_sender_app/database.dart' as database;
 import 'package:sms_sender_app/features/balance/balance_controller.dart';
 import 'package:sms_sender_app/features/contacts/add_contact_page.dart';
+import 'package:sms_sender_app/features/groups/application/groups_controller.dart';
 import 'package:sms_sender_app/features/groups/application/groups_providers.dart';
+import 'package:sms_sender_app/features/groups/application/groups_state.dart';
+import 'package:sms_sender_app/features/groups/domain/group_source.dart';
+import 'package:sms_sender_app/features/groups/domain/sms_recipient.dart';
+import 'package:sms_sender_app/features/groups/presentation/group_actions.dart';
+import 'package:sms_sender_app/features/groups/presentation/group_detail_page.dart';
+import 'package:sms_sender_app/features/groups/presentation/widgets/group_card.dart';
+import 'package:sms_sender_app/features/groups/presentation/widgets/groups_summary_panel.dart';
 import 'package:sms_sender_app/features/history/application/campaign_log_controller.dart';
 import 'package:sms_sender_app/features/history/domain/sms_campaign.dart';
 import 'package:sms_sender_app/features/history/presentation/server_messages_page.dart';
+import 'package:sms_sender_app/l10n/strings.dart';
 import 'package:sms_sender_app/shared/providers/app_providers.dart';
 import 'package:sms_sender_app/shared/widgets/message_composer.dart';
 import 'package:sms_sender_app/shared/widgets/stat_tile.dart';
@@ -22,6 +33,62 @@ import 'package:sms_sender_app/sms_send_coordinator.dart';
 
 enum _SendAction { refresh, serverTexts, clearSent, clearAll }
 
+/// How the backend contact list is ordered before it is cut into groups.
+enum ServerSort {
+  server,
+  byName,
+  byPhone,
+  unsentFirst;
+
+  static ServerSort fromName(String? name) => ServerSort.values
+      .firstWhere((v) => v.name == name, orElse: () => ServerSort.server);
+
+  String label(S s) => switch (this) {
+        ServerSort.server => s.sortServer,
+        ServerSort.byName => s.sortByName,
+        ServerSort.byPhone => s.sortByPhone,
+        ServerSort.unsentFirst => s.sortUnsentFirst,
+      };
+}
+
+/// Pure: backend contacts → unique, normalised, sorted recipients.
+List<SmsRecipient> serverContactsToRecipients(
+  List<database.Contact> contacts,
+  ServerSort sort,
+) {
+  final seen = <String>{};
+  final list = <SmsRecipient>[];
+  for (final c in contacts) {
+    final raw = c.phone_number.trim();
+    if (raw.isEmpty) continue;
+    final phone = PhoneNormalizer.normalize(raw) ?? raw;
+    if (!seen.add(phone)) continue;
+    list.add(
+      SmsRecipient(
+        phone: phone,
+        name: c.title,
+        status: c.isSent ? RecipientStatus.sent : RecipientStatus.pending,
+      ),
+    );
+  }
+  switch (sort) {
+    case ServerSort.server:
+      break;
+    case ServerSort.byName:
+      list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    case ServerSort.byPhone:
+      list.sort((a, b) => a.phone.compareTo(b.phone));
+    case ServerSort.unsentFirst:
+      final pending = list.where((r) => !r.isSent).toList();
+      final sent = list.where((r) => r.isSent).toList();
+      return [...pending, ...sent];
+  }
+  return list;
+}
+
+/// The backend contact list, cut into groups of 100 (A, B, C…). "Send to
+/// all" queues the groups one after another; a phone SMS limit pauses the
+/// queue and it resumes by itself.
 class SendPage extends ConsumerStatefulWidget {
   const SendPage({super.key});
 
@@ -30,815 +97,249 @@ class SendPage extends ConsumerStatefulWidget {
 }
 
 class _SendPageState extends ConsumerState<SendPage> {
-  List<Map<String, dynamic>> numbers = [];
-  List<Map<String, dynamic>> allNumbers = [];
-  List<Map<String, dynamic>> filteredNumbers = [];
-  String searchQuery = '';
-  Timer? _debounce;
-  bool isFirstLoading = true;
-  int totalCount = 0;
-  int sentCount = 0;
-  String? nextCursor;
-  bool isLoadingMore = false;
-  bool hasMore = true;
-  bool isSearching = false;
-  bool isSending = false;
-  bool stopSending = false;
-
-  final ScrollController _scrollController = ScrollController();
+  static const GroupSource _source = GroupSource.server;
+  static const String _sortKey = 'server_sort';
 
   late final database.ApiService db;
-
-  final TextEditingController numberController = TextEditingController();
-  final TextEditingController nameController =
-      TextEditingController();
-
-  /// Shared with [GroupsPage] through [messageControllerProvider].
   late final TextEditingController messageController;
-
+  final TextEditingController _searchController = TextEditingController();
   final SmsSendCoordinator _sendCoordinator = SmsSendCoordinator();
+
+  Timer? _debounce;
+  bool _searching = false;
+  bool _searchLoading = false;
+  List<database.Contact> _results = const [];
+  int totalCount = 0;
+  int sentCount = 0;
+  bool _syncing = false;
+  bool _errorDialogOpen = false;
+  ServerSort _sort = ServerSort.server;
 
   @override
   void initState() {
     super.initState();
     db = ref.read(apiServiceProvider);
     messageController = ref.read(messageControllerProvider);
-    requestPermission();
-    loadCount();
-    loadSentCount();
-    loadContacts();
-
-    _scrollController.addListener(_handleScrollReachedEnd);
-  }
-
-  void _handleScrollReachedEnd() {
-    if (_scrollController.position.pixels >=
-        _scrollController.position.maxScrollExtent - 300) {
-      loadMore();
-    }
-  }
-
-  Future<void> showLoadingDialog(String text) async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-            child: Row(
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    text,
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> showProgressDialog({
-    required String title,
-    required Future<void> Function(Function(int, String)) task,
-    bool showStopButton = false,
-  }) async {
-    int progress = 0;
-    String stepText = "Начало...";
-
-    late StateSetter setStateDialog;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            setStateDialog = setState;
-
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Text(title),
-
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  LinearProgressIndicator(
-                    value: progress / 100,
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  Text("$progress%"),
-
-                  const SizedBox(height: 8),
-
-                  Text(stepText),
-                ],
-              ),
-
-              actions: [
-
-                if (showStopButton)
-                  TextButton.icon(
-                    icon: const Icon(
-                      Icons.stop_circle,
-                      color: Colors.red,
-                    ),
-
-                    label: const Text(
-                      "Остановить",
-                      style: TextStyle(
-                        color: Colors.red,
-                      ),
-                    ),
-
-                    onPressed: () {
-
-                      setState(() {
-                        stopSending = true;
-                      });
-
-                    },
-                  ),
-
-              ],
-            );
-          },
-        );
-      },
-    );
-
-
-    await Future.delayed(
-      const Duration(milliseconds: 100),
-    );
-
-
-    await task((p, text) {
-
-      if (mounted) {
-        setStateDialog(() {
-
-          progress = p;
-          stepText = text;
-
-        });
-      }
-
+    Permission.sms.request();
+    _loadCounts();
+    _restoreSort();
+    Future.microtask(() async {
+      await ref.read(groupsControllerProvider(_source).notifier).ready;
+      if (!mounted) return;
+      if (ref.read(groupsControllerProvider(_source)).isEmpty) await _sync();
     });
   }
 
-  Future<void> loadAllContacts() async {
-
-    final contacts = await db.getAllContacts();
-
-    if (!mounted) return;
-
-    setState(() {
-
-      numbers = contacts.map((e) => {
-        "title": e.title,
-        "phone_number": e.phone_number,
-      }).toList();
-
-      isFirstLoading = false;
-
-    });
-
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    // messageController is owned by messageControllerProvider.
+    super.dispose();
   }
 
-  Future<void> loadContacts() async {
+  // ------------------------------------------------------------ backend
 
-    final result = await db.getContacts();
-
-
-    setState(() {
-
-      numbers = List<Map<String,dynamic>>.from(
-        result["results"].map((e)=>{
-
-          "title": e["title"],
-          "phone_number": e["phone_number"],
-
-        })
-      );
-
-
-      nextCursor = result["next"];
-
-      hasMore = nextCursor != null;
-
-      isFirstLoading = false;
-
-    });
-
-  }
-
-  Future<void> loadMore() async {
-
-    if(isLoadingMore || !hasMore){
-      return;
-    }
-
-
-    setState(() {
-      isLoadingMore = true;
-    });
-
-
-    final result = await db.getContacts(
-      nextUrl: nextCursor,
-    );
-
-
-    final newItems = List<Map<String,dynamic>>.from(
-      result["results"].map((e)=>{
-
-        "title": e["title"],
-        "phone_number": e["phone_number"],
-
-      })
-    );
-
-
-    setState(() {
-
-      numbers.addAll(newItems);
-
-      nextCursor = result["next"];
-
-      hasMore = nextCursor != null;
-
-      isLoadingMore = false;
-
-    });
-
-  }
-
-  Future<void> clearSentNumbers() async {
-
-    final confirm = await showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Очистить отправленные?"),
-        content: const Text(
-          "Будут удалены все номера из списка отправленных SMS",
-        ),
-        actions: [
-
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("Отмена"),
-          ),
-
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Удалить"),
-          ),
-
-        ],
-      ),
-    );
-
-
-    if (confirm != true) return;
-
-
-    await showLoadingDialog(
-      "Удаление отправленных номеров...",
-    );
-
-
+  Future<void> _loadCounts() async {
     try {
-
-      await db.resetAllSent();
-
-      await loadSentCount();
-
-
-      if (Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Список отправленных номеров очищен",
-          ),
-        ),
-      );
-
-
-    } catch (e) {
-
-      if (Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "Ошибка удаления: $e",
-          ),
-        ),
-      );
-
-    }
-  }
-
-  Future<void> loadSentCount() async {
-    final count = await db.getSentNumbersCount();
-
-    if (!mounted) return;
-
-    setState(() {
-      sentCount = count;
-    });
-  }
-
-  Future<void> openDelayDialog() async {
-    int delayMs = 500;
-
-    final result = await showDialog<int>(
-      context: context,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text("Задержка отправки"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text("Выбери задержку между SMS"),
-
-                  const SizedBox(height: 12),
-
-                  RadioListTile(
-                    title: const Text("Без задержки"),
-                    value: 0,
-                    groupValue: delayMs,
-                    onChanged: (v) => setState(() => delayMs = v!),
-                  ),
-
-                  RadioListTile(
-                    title: const Text("0.5 сек"),
-                    value: 500,
-                    groupValue: delayMs,
-                    onChanged: (v) => setState(() => delayMs = v!),
-                  ),
-
-                  RadioListTile(
-                    title: const Text("1 сек"),
-                    value: 1000,
-                    groupValue: delayMs,
-                    onChanged: (v) => setState(() => delayMs = v!),
-                  ),
-
-                  RadioListTile(
-                    title: const Text("2 сек"),
-                    value: 2000,
-                    groupValue: delayMs,
-                    onChanged: (v) => setState(() => delayMs = v!),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Отмена"),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context, delayMs),
-                  child: const Text("Старт"),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (result != null) {
-      sendSMS(delayMs);
-    }
-  }
-
-
-  Future<void> loadAllNumbers() async {
-    final data = await db.getAllContacts();
-
-    allNumbers = data
-        .map((e) => {"title": e.title, "phone_number": e.phone_number})
-        .toList();
-  }
-
-
-  Future<void> clearAllNumbers() async {
-    final confirm = await showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Очистить список?"),
-        content: const Text("Все номера будут удалены"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("Отмена"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Удалить"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    await showProgressDialog(
-      title: "Удаление...",
-      task: (update) async {
-        update(10, "Подготовка...");
-
-        await Future.delayed(const Duration(milliseconds: 300));
-
-        update(40, "Удаляем контакты...");
-        await db.deleteAllContactsBatch();
-
-        update(80, "Обновляем данные...");
-        await loadCount();
-        await loadContacts();
-
-        update(100, "Готово");
-
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        if (Navigator.canPop(context)) {
-          Navigator.pop(context);
-        }
-      },
-    );
-  }
-
-  Future<void> loadCount() async {
-    final count = await db.getContactsCount();
-
-    setState(() {
-      totalCount = count;
-    });
-  }
-
-  Future<void> requestPermission() async {
-    await Permission.sms.request();
-  }
-
-  Future<void> removeNumber(String phone) async {
-    await db.deleteContact(phone);
-    await loadCount();
-    await loadContacts();
-  }
-
-  Future<void> saveMessage(String text) async {
-    await db.insertMessage(text);
-  }
-
-  Future<bool> sendSingleSms({
-    required String phone,
-    required String message,
-    required bool multipart,
-  }) async {
-    final normalizedPhone = phone.trim();
-    if (normalizedPhone.isEmpty) {
-      return false;
-    }
-
-    final bool alreadySent = await db.isNumberSent(normalizedPhone);
-    if (alreadySent) {
-      return false;
-    }
-
-    return _sendCoordinator.runPhoneSend(normalizedPhone, () async {
-      final result = await ref.read(smsSenderProvider).send(
-            phone: normalizedPhone,
-            message: message,
-            multipart: multipart,
-          );
-
-      if (!result.success) {
-        return false;
-      }
-
-      final marked = await db.markNumberAsSentIfNeeded(normalizedPhone);
-      if (!marked) {
-        return false;
-      }
-
-      if (mounted) {
-        setState(() {
-          sentCount += 1;
-        });
-      }
-
-      return true;
-    });
-  }
-
-  Future<void> sendSMS([int delayMs = 0]) async {
-    final message = messageController.text.trim();
-
-    if (message.isEmpty || totalCount == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Заполни поля')),
-      );
-      return;
-    }
-
-    if (isSending) return;
-
-    if (!mounted) return;
-
-    setState(() {
-      isSending = true;
-    });
-
-    final contacts = await db.getAllContacts();
-    final sendList = contacts
-        .where((e) => e.phone_number.trim().isNotEmpty)
-        .map((e) => {
-              'title': e.title,
-              'phone_number': e.phone_number,
-              'is_sent': e.isSent,
-            })
-        .toList();
-
-    if (sendList.isEmpty) {
+      final total = await db.getContactsCount();
+      final sent = await db.getSentNumbersCount();
       if (!mounted) return;
       setState(() {
-        isSending = false;
+        totalCount = total;
+        sentCount = sent;
       });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Нет номеров для отправки"),
-        ),
-      );
-
-      return;
-    }
-
-    await showProgressDialog(
-      title: "Отправка SMS",
-      showStopButton: true,
-      task: (update) async {
-        final int total = sendList.length;
-        final info = SmsMessageInfo.analyze(message);
-        final bool multipart = info.isMultipart;
-        final bridge = ref.read(deviceBridgeProvider);
-        final balance = ref.read(balanceProvider.notifier);
-
-        int sent = 0;
-        final startedAt = DateTime.now();
-        final processed = <CampaignRecipient>[];
-
-        stopSending = false;
-        unawaited(bridge.startSending('Рассылка SMS', 'Все номера: 0 / $total'));
-        unawaited(bridge.keepScreenOn(true));
-
-        for (int i = 0; i < sendList.length; i++) {
-          if (stopSending || !mounted) {
-            break;
-          }
-
-          final phone = sendList[i]['phone_number'].toString();
-          final alreadySent = await db.isNumberSent(phone);
-          if (alreadySent) {
-            continue;
-          }
-
-          try {
-            final success = await sendSingleSms(
-              phone: phone,
-              message: message,
-              multipart: multipart,
-            );
-            processed.add(
-              CampaignRecipient(
-                phone: phone,
-                name: (sendList[i]['title'] ?? '').toString(),
-                sent: success,
-                error: success ? null : 'Не отправлено',
-                sentAt: success ? DateTime.now() : null,
-              ),
-            );
-            if (success) {
-              unawaited(balance.deduct(smsCount: 1, parts: info.parts));
-            }
-
-            if (!success) {
-              if (delayMs > 0 && mounted) {
-                await Future.delayed(Duration(milliseconds: delayMs));
-              }
-              continue;
-            }
-          } catch (e, stack) {
-            debugPrint('ERROR: $e');
-            debugPrintStack(stackTrace: stack);
-            stopSending = true;
-            processed.add(
-              CampaignRecipient(
-                phone: phone,
-                name: (sendList[i]['title'] ?? '').toString(),
-                sent: false,
-                error: e.toString(),
-              ),
-            );
-            unawaited(bridge.stopSending());
-            unawaited(bridge.keepScreenOn(false));
-            await _recordCampaign(
-              message: message,
-              startedAt: startedAt,
-              processed: processed,
-            );
-
-            if (!mounted) return;
-            if (Navigator.canPop(context)) {
-              Navigator.pop(context);
-            }
-
-            await showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (_) => AlertDialog(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                title: const Row(
-                  children: [
-                    Icon(Icons.error_outline, color: Colors.red, size: 30),
-                    SizedBox(width: 10),
-                    Text('Отправка остановлена'),
-                  ],
-                ),
-                content: const Text(
-                  'Достигнут лимит отправки SMS или оператор временно запретил отправку.\n\nПопробуйте позже.',
-                  style: TextStyle(fontSize: 16),
-                ),
-                actions: [
-                  FilledButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Понятно'),
-                  )
-                ],
-              ),
-            );
-
-            return;
-          }
-
-          sent++;
-          final percent = ((sent / total) * 100).toInt();
-          update(percent, 'Отправлено $sent из $total');
-          unawaited(
-            bridge.updateSending('Рассылка SMS', 'Все номера: $sent / $total'),
-          );
-
-          if (delayMs > 0 && mounted) {
-            await Future.delayed(Duration(milliseconds: delayMs));
-          }
-        }
-
-        unawaited(bridge.stopSending());
-        unawaited(bridge.keepScreenOn(false));
-        await _recordCampaign(
-          message: message,
-          startedAt: startedAt,
-          processed: processed,
-        );
-        await saveMessage(message);
-
-        if (stopSending) {
-          update(100, 'Остановлено пользователем');
-        } else {
-          update(100, 'Завершено');
-        }
-
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        if (mounted && Navigator.canPop(context)) {
-          Navigator.pop(context);
-        }
-      },
-    );
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('SMS отправлены')),
-    );
-
-    if (mounted) {
-      setState(() {
-        isSending = false;
-      });
+    } catch (error) {
+      debugPrint('SendPage: counts failed: $error');
     }
   }
 
-  void openHistory() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ServerMessagesPage()),
-    );
+  Future<void> _restoreSort() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getString(_sortKey);
+      if (stored == null || !mounted) return;
+      setState(() => _sort = ServerSort.fromName(stored));
+    } catch (_) {}
   }
 
-  // ------------------------------------------------------------------ UI
+  Future<void> _selectSort(ServerSort sort) async {
+    setState(() => _sort = sort);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_sortKey, sort.name);
+    } catch (_) {}
+    await _sync();
+  }
+
+  /// Loads every contact from the backend and rebuilds the server groups.
+  /// Backend "sent" flags become sent statuses; custom group names survive.
+  Future<void> _sync() async {
+    if (_syncing) return;
+    final s = S.of(context);
+    final state = ref.read(groupsControllerProvider(_source));
+    if (state.isSending) return;
+    setState(() => _syncing = true);
+    try {
+      final contacts = await db.getAllContacts();
+      final recipients = serverContactsToRecipients(contacts, _sort);
+      final summary = await ref
+          .read(groupsControllerProvider(_source).notifier)
+          .importRecipients(recipients, replace: true, keepNames: true);
+      await _loadCounts();
+      _snack(s.syncResult(summary.imported, summary.groupsCreated));
+    } catch (error) {
+      _snack('${s.syncError}: $error');
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  // ------------------------------------------------------------- search
 
   void _onSearchChanged(String value) {
-    if (_debounce?.isActive ?? false) _debounce!.cancel();
-
-    _debounce = Timer(const Duration(milliseconds: 200), () async {
-      if (value.trim().isEmpty) {
-        isSearching = false;
-        await loadContacts();
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () async {
+      final query = value.trim();
+      if (query.isEmpty) {
+        if (mounted) setState(() => _searching = false);
         return;
       }
-
-      isSearching = true;
-      final data = await db.searchContacts(value);
-      if (!mounted) return;
-
       setState(() {
-        numbers = data
-            .map((e) => {"title": e.title, "phone_number": e.phone_number})
-            .toList();
+        _searching = true;
+        _searchLoading = true;
       });
+      try {
+        final data = await db.searchContacts(query);
+        if (!mounted) return;
+        setState(() {
+          _results = data;
+          _searchLoading = false;
+        });
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _searchLoading = false);
+        _snack(error.toString());
+      }
     });
   }
+
+  // ------------------------------------------------------------ actions
 
   Future<void> _openAddContact() async {
     await Navigator.push(
       context,
       MaterialPageRoute<void>(builder: (_) => const AddContactPage()),
     );
-    await loadCount();
-    await loadContacts();
+    await _sync();
   }
 
   Future<void> _onAction(_SendAction action) async {
     switch (action) {
       case _SendAction.refresh:
-        await loadCount();
-        await loadSentCount();
-        await loadContacts();
+        await _sync();
       case _SendAction.serverTexts:
-        openHistory();
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(builder: (_) => const ServerMessagesPage()),
+        );
       case _SendAction.clearSent:
-        await clearSentNumbers();
+        await _clearSent();
       case _SendAction.clearAll:
-        await clearAllNumbers();
+        await _clearAll();
     }
   }
 
-  Future<void> _sendToOne(String phone) async {
-    final message = messageController.text.trim();
-    final bool multipart = SmsMessageInfo.analyze(message).isMultipart;
+  Future<void> _clearSent() async {
+    final s = S.of(context);
+    final ok = await _confirm(s.clearSentTitle, s.clearSentBody, s.reset);
+    if (!ok || !mounted) return;
+    try {
+      await db.resetAllSent();
+      await ref.read(groupsControllerProvider(_source).notifier).resetAll();
+      await _loadCounts();
+      _snack(s.clearSentDone);
+    } catch (error) {
+      _snack(s.deleteError(error));
+    }
+  }
 
+  Future<void> _clearAll() async {
+    final s = S.of(context);
+    final ok = await _confirm(s.clearListTitle, s.clearListBody, s.delete);
+    if (!ok || !mounted) return;
+    try {
+      await db.deleteAllContactsBatch();
+      await ref.read(groupsControllerProvider(_source).notifier).clearAll();
+      await _loadCounts();
+    } catch (error) {
+      _snack(s.deleteError(error));
+    }
+  }
+
+  Future<bool> _confirm(String title, String body, String confirm) async {
+    final s = S.of(context);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(confirm),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  Future<bool> _sendSingleSms(String phone, String message) async {
+    final multipart = SmsMessageInfo.analyze(message).isMultipart;
+    final alreadySent = await db.isNumberSent(phone);
+    if (alreadySent) return false;
+    return _sendCoordinator.runPhoneSend(phone, () async {
+      final result = await ref.read(smsSenderProvider).send(
+            phone: phone,
+            message: message,
+            multipart: multipart,
+          );
+      if (!result.success) return false;
+      final marked = await db.markNumberAsSentIfNeeded(phone);
+      if (!marked) return false;
+      if (mounted) setState(() => sentCount += 1);
+      return true;
+    });
+  }
+
+  Future<void> _sendToOne(String phone) async {
+    final s = S.of(context);
+    final message = messageController.text.trim();
     if (message.isEmpty) {
-      _snack('Введите текст сообщения');
+      _snack(s.enterMessage);
       return;
     }
-
     final alreadySent = await db.isNumberSent(phone);
     if (!mounted) return;
     if (alreadySent) {
-      _snack('На этот номер SMS уже была отправлена');
+      _snack(s.alreadySentToNumber);
       return;
     }
 
-    await showLoadingDialog('Отправка SMS...');
     final startedAt = DateTime.now();
     var success = false;
     String? error;
-
     try {
-      success = await sendSingleSms(
-        phone: phone,
-        message: message,
-        multipart: multipart,
-      );
+      success = await _sendSingleSms(phone, message);
       if (success) {
         unawaited(
           ref.read(balanceProvider.notifier).deduct(
@@ -850,68 +351,84 @@ class _SendPageState extends ConsumerState<SendPage> {
     } catch (e) {
       error = e.toString();
     }
-
-    if (mounted && Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
     if (!mounted) return;
 
-    await _recordCampaign(
-      message: message,
-      startedAt: startedAt,
-      source: CampaignSource.single,
-      label: phone,
-      processed: [
-        CampaignRecipient(
-          phone: phone,
-          sent: success,
-          error: success ? null : (error ?? 'Не отправлено'),
-          sentAt: success ? DateTime.now() : null,
-        ),
-      ],
-    );
-
+    await ref.read(campaignLogProvider.notifier).record(
+          SmsCampaign.fromRun(
+            message: message,
+            source: CampaignSource.single,
+            sourceLabel: phone,
+            startedAt: startedAt,
+            recipients: [
+              CampaignRecipient(
+                phone: phone,
+                sent: success,
+                error: success ? null : (error ?? s.notSent),
+                sentAt: success ? DateTime.now() : null,
+              ),
+            ],
+          ),
+        );
     if (success) {
-      await saveMessage(message);
-      _snack('Отправлено: $phone');
+      try {
+        await db.insertMessage(message);
+      } catch (_) {}
+      _snack(s.sentTo(phone));
     } else {
-      _snack('Не удалось отправить: $phone');
+      _snack(s.failedTo(phone));
     }
   }
 
   Future<void> _deleteOne(String phone) async {
-    await showLoadingDialog("Удаление номера...");
-    await db.deleteContact(phone);
-    if (!mounted) return;
-
-    setState(() {
-      numbers.removeWhere((n) => n["phone_number"] == phone);
-      totalCount--;
-    });
-
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
+    final s = S.of(context);
+    try {
+      await db.deleteContact(phone);
+      if (!mounted) return;
+      setState(() {
+        _results = [for (final c in _results) if (c.phone_number != phone) c];
+        totalCount = math.max(totalCount - 1, 0);
+      });
+      _snack(s.deleted(phone));
+      unawaited(_sync());
+    } catch (error) {
+      _snack(s.deleteError(error));
     }
-    _snack("Удалён: $phone");
   }
 
-  Future<void> _recordCampaign({
-    required String message,
-    required DateTime startedAt,
-    required List<CampaignRecipient> processed,
-    CampaignSource source = CampaignSource.all,
-    String label = 'Все номера',
-  }) async {
-    if (processed.isEmpty) return;
-    await ref.read(campaignLogProvider.notifier).record(
-          SmsCampaign.fromRun(
-            message: message,
-            source: source,
-            sourceLabel: label,
-            startedAt: startedAt,
-            recipients: processed,
+  void _showError(String message) {
+    if (_errorDialogOpen) return;
+    _errorDialogOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _errorDialogOpen = false;
+        return;
+      }
+      final s = S.of(context);
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.error_outline, color: Theme.of(ctx).colorScheme.error),
+              const SizedBox(width: 10),
+              Expanded(child: Text(s.sendStopped)),
+            ],
           ),
-        );
+          content: Text(message, style: const TextStyle(fontSize: 15)),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(s.understood),
+            ),
+          ],
+        ),
+      );
+      _errorDialogOpen = false;
+      if (mounted) {
+        ref.read(groupsControllerProvider(_source).notifier).dismissError();
+      }
+    });
   }
 
   void _snack(String text) {
@@ -919,167 +436,347 @@ class _SendPageState extends ConsumerState<SendPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // ----------------------------------------------------------------- UI
+
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    ref.listen<String?>(
+      groupsControllerProvider(_source).select((st) => st.errorMessage),
+      (previous, next) {
+        if (next != null && next != previous) _showError(next);
+      },
+    );
+
+    final state = ref.watch(groupsControllerProvider(_source));
+    final delayMs = ref.watch(sendDelayProvider);
+    final balance = ref.watch(balanceProvider);
+    final parts = SmsMessageInfo.analyze(messageController.text).parts;
+    final partsForCost = parts == 0 ? 1 : parts;
+    final actions = GroupActions(context, ref, source: _source);
+    final notifier = ref.read(groupsControllerProvider(_source).notifier);
+    final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final canSend = numbers.isNotEmpty && !isSending;
     final remaining = math.max(totalCount - sentCount, 0);
+    final canSendAll =
+        !_searching && !state.isImporting && state.pendingGroupsCount > 0;
 
     return Scaffold(
-      appBar: AppBar(
-        leading: const ShellMenuButton(),
-        title: const Text('Рассылка'),
-        actions: [
-          IconButton(
-            tooltip: 'Добавить номер',
-            icon: const Icon(Icons.person_add_alt_1_outlined),
-            onPressed: _openAddContact,
-          ),
-          PopupMenuButton<_SendAction>(
-            tooltip: 'Ещё',
-            onSelected: _onAction,
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: _SendAction.refresh,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.refresh),
-                  title: Text('Обновить список'),
+      appBar: state.hasSelection
+          ? AppBar(
+              leading: IconButton(
+                tooltip: s.clearSelection,
+                icon: const Icon(Icons.close),
+                onPressed: notifier.clearSelection,
+              ),
+              title: Text(s.selected(state.selectedIds.length)),
+              actions: [
+                IconButton(
+                  tooltip: s.selectAll,
+                  icon: const Icon(Icons.select_all),
+                  onPressed: notifier.selectAllPending,
                 ),
-              ),
-              const PopupMenuItem(
-                value: _SendAction.serverTexts,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.cloud_outlined),
-                  title: Text('Тексты на сервере'),
+                IconButton(
+                  tooltip: s.sendSelected,
+                  icon: const Icon(Icons.send),
+                  onPressed: state.isImporting ? null : actions.sendSelected,
                 ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: _SendAction.clearSent,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.cleaning_services_outlined,
-                      color: Colors.orange),
-                  title: Text('Сбросить отправленные'),
+              ],
+            )
+          : AppBar(
+              leading: const ShellMenuButton(),
+              title: Text(s.sendTitle),
+              actions: [
+                IconButton(
+                  tooltip: s.syncFromServer,
+                  icon: const Icon(Icons.cloud_download_outlined),
+                  onPressed: _syncing || state.isSending ? null : _sync,
                 ),
-              ),
-              PopupMenuItem(
-                value: _SendAction.clearAll,
-                enabled: numbers.isNotEmpty,
-                child: const ListTile(
-                  dense: true,
-                  leading: Icon(Icons.delete_sweep_outlined, color: Colors.red),
-                  title: Text('Удалить все номера'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: canSend ? openDelayDialog : null,
-        backgroundColor: canSend ? null : scheme.surfaceContainerHighest,
-        foregroundColor: canSend ? null : scheme.onSurfaceVariant,
-        icon: Icon(isSending ? Icons.hourglass_top : Icons.send),
-        label: Text(isSending ? 'Отправка…' : 'Отправить всем'),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                  child: MessageComposer(
-                    controller: messageController,
-                    enabled: !isSending,
-                    minLines: 2,
-                    maxLines: 5,
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: StatTile(
-                      label: 'Всего номеров',
-                      value: '$totalCount',
-                      icon: Icons.people_outline,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: StatTile(
-                      label: 'Отправлено',
-                      value: '$sentCount',
-                      subtitle: totalCount > 0 ? 'осталось $remaining' : null,
-                      icon: Icons.check_circle_outline,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-              child: TextField(
-                decoration: const InputDecoration(
-                  hintText: 'Поиск номера или имени',
-                  prefixIcon: Icon(Icons.search),
-                  isDense: true,
-                ),
-                onChanged: _onSearchChanged,
-              ),
-            ),
-            Expanded(
-              child: isFirstLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : numbers.isEmpty
-                      ? _EmptyContacts(onAdd: _openAddContact)
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
-                          itemCount: numbers.length + (isLoadingMore ? 1 : 0),
-                          itemBuilder: (context, index) {
-                            if (index == numbers.length) {
-                              return const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(child: CircularProgressIndicator()),
-                              );
-                            }
-                            final item = numbers[index];
-                            final phone = (item["phone_number"] ?? '').toString();
-                            return _ContactTile(
-                              name: (item["title"] ?? '').toString(),
-                              phone: phone,
-                              enabled: !isSending,
-                              onSend: () => _sendToOne(phone),
-                              onDelete: () => _deleteOne(phone),
-                            );
-                          },
+                PopupMenuButton<ServerSort>(
+                  tooltip: s.sortLabel,
+                  icon: const Icon(Icons.sort),
+                  enabled: !_syncing && !state.isSending,
+                  onSelected: _selectSort,
+                  itemBuilder: (_) => [
+                    for (final sort in ServerSort.values)
+                      PopupMenuItem(
+                        value: sort,
+                        child: ListTile(
+                          dense: true,
+                          leading: Icon(
+                            sort == _sort
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_off,
+                          ),
+                          title: Text(sort.label(s)),
                         ),
+                      ),
+                  ],
+                ),
+                IconButton(
+                  tooltip: s.drawerAddNumber,
+                  icon: const Icon(Icons.person_add_alt_1_outlined),
+                  onPressed: _openAddContact,
+                ),
+                PopupMenuButton<_SendAction>(
+                  tooltip: s.more,
+                  onSelected: _onAction,
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: _SendAction.refresh,
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.refresh),
+                        title: Text(s.refreshList),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: _SendAction.serverTexts,
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.cloud_outlined),
+                        title: Text(s.drawerServerTexts),
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: _SendAction.clearSent,
+                      enabled: !state.isSending,
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.cleaning_services_outlined, color: t.warning),
+                        title: Text(s.clearSent),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: _SendAction.clearAll,
+                      enabled: totalCount > 0 && !state.isSending,
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.delete_sweep_outlined, color: t.danger),
+                        title: Text(s.deleteAllNumbers),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
+      floatingActionButton: _searching
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: canSendAll ? actions.sendAll : null,
+              backgroundColor: canSendAll ? null : scheme.surfaceContainerHighest,
+              foregroundColor: canSendAll ? null : scheme.onSurfaceVariant,
+              icon: Icon(state.isSending ? Icons.playlist_add : Icons.send),
+              label: Text(state.isSending ? s.queueAll(state.pendingGroupsCount) : s.sendToAll),
+            ),
+      body: SafeArea(
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                    child: MessageComposer(
+                      controller: messageController,
+                      enabled: !state.isSending,
+                      minLines: 2,
+                      maxLines: 5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: StatTile(
+                        label: s.totalNumbers,
+                        value: '$totalCount',
+                        icon: Icons.people_outline,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: StatTile(
+                        label: s.sentLabel,
+                        value: '$sentCount',
+                        subtitle: totalCount > 0 ? s.remainingN(remaining) : null,
+                        icon: Icons.check_circle_outline,
+                        color: t.success,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: s.searchHint,
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                    suffixIcon: _searching
+                        ? IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () {
+                              _searchController.clear();
+                              _onSearchChanged('');
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: _onSearchChanged,
+                ),
+              ),
+            ),
+            if (_searching)
+              _buildSearchResults(s, scheme)
+            else ...[
+              if (_syncing)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Column(
+                      children: [
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 6),
+                        Text(
+                          s.syncing,
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (!state.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                    child: GroupsSummaryPanel(
+                      state: state,
+                      delayMs: delayMs,
+                      onDelayChanged: (ms) =>
+                          ref.read(sendDelayProvider.notifier).select(ms),
+                      onSendAll: actions.sendAll,
+                      onStop: actions.stop,
+                      onResumeNow: actions.resumeNow,
+                      balance: balance,
+                      onCheckBalance: () =>
+                          ref.read(balanceProvider.notifier).checkViaSms(),
+                      onDequeue: (id) {
+                        final group = state.groupById(id);
+                        if (group != null) actions.dequeue(group);
+                      },
+                    ),
+                  ),
+                ),
+              _buildGroups(state, actions, balance, partsForCost),
+            ],
           ],
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _scrollController.removeListener(_handleScrollReachedEnd);
-    _scrollController.dispose();
-    nameController.dispose();
-    numberController.dispose();
-    // messageController is owned by messageControllerProvider.
-    super.dispose();
+  Widget _buildGroups(
+    GroupsState state,
+    GroupActions actions,
+    BalanceState balance,
+    int partsForCost,
+  ) {
+    if (state.isLoading) {
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (state.isEmpty) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _syncing
+            ? const SizedBox.shrink()
+            : _EmptyNumbers(onAdd: _openAddContact, onSync: _sync),
+      );
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 96),
+      sliver: SliverList.builder(
+        itemCount: state.groups.length,
+        itemBuilder: (context, index) {
+          final group = state.groups[index];
+          final c = group.counters;
+          return GroupCard(
+            key: ValueKey(group.id),
+            group: group,
+            isActive: state.activeGroupId == group.id,
+            actionsEnabled: !state.isImporting && !_syncing,
+            queuePosition: state.queuePosition(group.id),
+            selectionMode: state.hasSelection,
+            selected: state.isSelected(group.id),
+            onToggleSelected: () => ref
+                .read(groupsControllerProvider(_source).notifier)
+                .toggleSelected(group.id),
+            onDequeue: () => actions.dequeue(group),
+            onRename: () => actions.rename(group),
+            costLabel: c.remaining > 0
+                ? '≈ ${formatManat(balance.cost(c.remaining, partsForCost))}'
+                : null,
+            onSend: () => actions.sendGroup(group),
+            onReset: () => actions.resetGroup(group),
+            onRemove: () => actions.removeGroup(group),
+            onOpen: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    GroupDetailPage(groupId: group.id, source: _source),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSearchResults(S s, ColorScheme scheme) {
+    if (_searchLoading) {
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_results.isEmpty) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Text(s.noMatches, style: TextStyle(color: scheme.onSurfaceVariant)),
+        ),
+      );
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      sliver: SliverList.builder(
+        itemCount: _results.length,
+        itemBuilder: (context, index) {
+          final c = _results[index];
+          return _ContactTile(
+            name: c.title,
+            phone: c.phone_number,
+            isSent: c.isSent,
+            onSend: () => _sendToOne(c.phone_number),
+            onDelete: () => _deleteOne(c.phone_number),
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -1087,19 +784,21 @@ class _ContactTile extends StatelessWidget {
   const _ContactTile({
     required this.name,
     required this.phone,
-    required this.enabled,
+    required this.isSent,
     required this.onSend,
     required this.onDelete,
   });
 
   final String name;
   final String phone;
-  final bool enabled;
+  final bool isSent;
   final VoidCallback onSend;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
+    final t = AppStyleTokens.of(context);
     final scheme = Theme.of(context).colorScheme;
     final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '#';
 
@@ -1117,21 +816,23 @@ class _ContactTile extends StatelessWidget {
           phone,
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
-        subtitle: name.isNotEmpty
-            ? Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)
-            : null,
+        subtitle: Text(
+          [if (name.isNotEmpty) name, if (isSent) s.statusSent].join(' · '),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: 'Отправить этому номеру',
-              icon: const Icon(Icons.send_outlined, color: Colors.green),
-              onPressed: enabled ? onSend : null,
+              tooltip: s.sendToThisNumber,
+              icon: Icon(Icons.send_outlined, color: t.success),
+              onPressed: onSend,
             ),
             IconButton(
-              tooltip: 'Удалить номер',
-              icon: const Icon(Icons.delete_outline, color: Colors.red),
-              onPressed: enabled ? onDelete : null,
+              tooltip: s.deleteNumber,
+              icon: Icon(Icons.delete_outline, color: t.danger),
+              onPressed: onDelete,
             ),
           ],
         ),
@@ -1140,13 +841,15 @@ class _ContactTile extends StatelessWidget {
   }
 }
 
-class _EmptyContacts extends StatelessWidget {
-  const _EmptyContacts({required this.onAdd});
+class _EmptyNumbers extends StatelessWidget {
+  const _EmptyNumbers({required this.onAdd, required this.onSync});
 
   final VoidCallback onAdd;
+  final VoidCallback onSync;
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
@@ -1156,21 +859,33 @@ class _EmptyContacts extends StatelessWidget {
           children: [
             Icon(Icons.contact_phone_outlined, size: 64, color: scheme.onSurfaceVariant),
             const SizedBox(height: 12),
-            const Text(
-              'Номеров пока нет',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            Text(
+              s.noNumbersTitle,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Text(
-              'Добавьте номера вручную, из контактов или импортируйте Excel.',
+              s.noNumbersHint,
               textAlign: TextAlign.center,
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onAdd,
-              icon: const Icon(Icons.person_add_alt_1_outlined),
-              label: const Text('Добавить номер'),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                FilledButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.person_add_alt_1_outlined),
+                  label: Text(s.drawerAddNumber),
+                ),
+                OutlinedButton.icon(
+                  onPressed: onSync,
+                  icon: const Icon(Icons.cloud_download_outlined),
+                  label: Text(s.syncFromServer),
+                ),
+              ],
             ),
           ],
         ),
